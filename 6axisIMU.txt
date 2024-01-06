@@ -1,0 +1,9 @@
+BMI270 6 axis IMU acceleromter and Gyro
+
+Pinout
+GND -> GND
+3V3 -> 3V3
+SDA -> 11
+SCL -> 12
+ADR -> 13
+CS  -> 10

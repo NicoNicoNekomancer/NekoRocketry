@@ -1,0 +1,9 @@
+m25611 barometer. used the spi test (5, 13, 19, 18)
+pins are 
+VCC -> 3.3 
+GND -> GND
+SCL -> 18
+SDA -> 13
+CSO -> 5
+SDO -> 19
+PS -> GND
