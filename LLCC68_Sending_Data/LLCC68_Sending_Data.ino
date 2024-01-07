@@ -16,22 +16,30 @@
 BMI270 imu;
 #define INITIATING_NODE
 //setting pins being used
-int LORACS    = 6; //shared between spi and lora
-int LORAIRQ   = 2;
-int LORARST   = 3;
-int LORABUSY  = 4;
-int LORAMOSI  = 13;
-int LORAMISO  = 19;
-int LORASCK   = 18;
+uint32_t LORAclockFrequency = 2000000;
+uint8_t LORACS    = 6; //shared between spi and lora
+uint8_t LORAIRQ   = 2;
+uint8_t LORARST   = 3;
+uint8_t LORABUSY  = 4;
+uint16_t LORAMOSI  = 13;
+uint16_t LORAMISO  = 19;
+uint16_t LORASCK   = 18;
 
-uint8_t chipSelectPin = 5;
-uint32_t clockFrequency = 100000;
-int IMUCS     = 5;
-int IMUMOSI  = 41;
-int IMUMISO  = 40; //adr
-int IMUSCK   = 42;
 
-int DataLength = 0;
+uint32_t IMUclockFrequency = 100000;
+uint8_t  IMUCS    = 5;
+uint16_t IMUMOSI  = 41;
+uint16_t IMUMISO  = 40; //adr
+uint16_t IMUSCK   = 42;
+//initialize sensor variables
+float AccelX = 0;
+float AccelY = 0;
+float AccelZ = 0;
+float GyroX  = 0;
+float GyroY  = 0;
+float GyroZ  = 0;
+//Initialize message variables
+uint8_t DataLength = 0;
 String message = String(100, BIN);
 
 // SX1262 has the following connections:
@@ -42,7 +50,7 @@ String message = String(100, BIN);
 // SPI 
 // SPI Settings
 SPIClass LoraSPI(HSPI);
-SPISettings LoraSPISettings(2000000, MSBFIRST, SPI_MODE0);
+SPISettings LoraSPISettings(LORAclockFrequency, MSBFIRST, SPI_MODE0);
 LLCC68 radio = new Module(LORACS, LORAIRQ, LORARST, LORABUSY, LoraSPI, LoraSPISettings); // this one must be used because esp32
 
 
@@ -66,24 +74,24 @@ void setFlag(void) {
 }
 
 void setup() {
+
+    //setting CS pins to output and forcing high to make sure they are all off
     pinMode(IMUCS, OUTPUT);
     pinMode(LORACS, OUTPUT);
     digitalWrite(LORACS, HIGH);
     digitalWrite(IMUCS, HIGH);
 
+  //start serial communication
   Serial.begin(115200);
 
-    Serial.println("BMI270 Example 2 - Basic Readings SPI");
+  Serial.println("BMI270 Example 2 - Basic Readings SPI");
 
     // Initialize the SPI library
     SPI.begin(IMUSCK,IMUMISO,IMUMOSI, IMUCS);
-
-    
-    imu.beginSPI(IMUCS, clockFrequency);
     
     // Check if sensor is connected and initialize
     // Clock frequency is optional (defaults to 100kHz)
-    while(imu.beginSPI(IMUCS, clockFrequency) != BMI2_OK)
+    while(imu.beginSPI(IMUCS, IMUclockFrequency) != BMI2_OK)
     {
         // Not connected, inform user
         Serial.println("Error: BMI270 not connected, check wiring and CS pin!");
@@ -97,8 +105,6 @@ void setup() {
   LoraSPI.begin(LORASCK,LORAMISO,LORAMOSI,LORACS);
   // initialize SX1262 with default settings
   Serial.print(F("[SX1262] Initializing ... "));
-
-
   // carrier frequency:           Carrier frequency in MHz. Defaults to 434.0 MHz. The .0 is important because otherwise it freaks out and goes back to default
   // bandwidth:                   LoRa bandwidth in kHz. Defaults to 125.0 kHz. Up to 500 kHz. Will need to revisit datasheet to get the exact numbers
   // spreading factor:            LoRa spreading factor. Defaults to 9. {5-11}
@@ -126,12 +132,28 @@ void setup() {
 void loop() {
     
 
+    // Get measurements from the sensor. This must be called before accessing
+    // the sensor data, otherwise it will never update
+    imu.getSensorData();
+    // Get acceleration data
+    AccelX = imu.data.accelX;
+    Serial.println (AccelX);
+    AccelY = imu.data.accelX;
+    AccelZ = imu.data.accelX;
+
+    GyroX  = imu.data.gyroX;
+    GyroY  = imu.data.gyroY;
+    GyroZ  = imu.data.gyroZ;
+
+    message = String(AccelX) + String(AccelY) + String(AccelZ) + String(GyroX) + String(GyroX) + String(GyroX);
+      Serial.println (message);
       DataLength = message.length();
+      Serial.println (DataLength);
       Serial.println(F("[SX1262] Sending another packet ... "));
       transmissionState = radio.startTransmit(message, DataLength);
       Serial.println(digitalRead(LORACS));
       transmitFlag = true;
       Serial.println(digitalRead(LORACS));
-      delay(500);
+      delay(1000);
   }
 

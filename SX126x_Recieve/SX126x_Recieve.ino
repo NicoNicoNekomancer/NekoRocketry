@@ -12,6 +12,43 @@
 #include <RadioLib.h>
 #include <SPI.h>
 
+
+//set variables that are to be recieved
+uint8_t AccelXBIN;
+uint8_t AccelYBIN;
+uint8_t AccelZBIN;
+uint8_t GyroXBIN;
+uint8_t GyroYBIN;
+uint8_t GyroZBIN;
+
+uint8_t Message; 
+
+/******************************************************************************************************************************************************
+HEY YOU
+The order of this is super important as this is the packet structure. You dont want to mess around with this because it can literally break everything. 
+So when the data is combined on the altimeter size, that order MUST be the same on this size when you take it apart into each individual part again. 
+The general layout, past the radio stuff because we honestly dont care about what the radio does, is the following
+- Callsign
+  We want to make sure that the fcc at least can somewhat figure out who is sending what, plus this helps with interference issues if someone around you 
+  is using another altimeter is on the same frequency. Can also allow for multi altimeter data reading by logging this but thats something for later
+*/
+
+//since these will be turned into their initial data type, also set those here
+float AccelX = 0;
+float AccelY = 0;
+float AccelZ = 0;
+float GyroX  = 0;
+float GyroY  = 0;
+float GyroZ  = 0;
+
+//lets also get the size of these because we sort of need that
+unsigned char AccelXSize[sizeof(AccelX)];
+unsigned char AccelYSize[sizeof(AccelY)];
+unsigned char AccelZSize[sizeof(AccelZ)];
+unsigned char GyroXSize[sizeof(GyroX)];
+unsigned char GyroYSize[sizeof(GyroY)];
+unsigned char GyroZSize[sizeof(GyroZ)];
+
 // uncomment the following only on one
 // of the nodes to initiate the pings
 #define INITIATING_NODE
@@ -54,6 +91,21 @@ void setFlag(void) {
   // we sent or received a packet, set the flag
   operationDone = true;
 }
+
+
+
+
+
+void bytesToFloat(float &num, unsigned char binaryBytes[sizeof(float)])
+{
+        unsigned char * numPtr = reinterpret_cast<unsigned char *>(&num); 
+        for (unsigned short i = 0; i < sizeof(float); i++)
+        {
+                (*(numPtr++)) = binaryBytes[i]; 
+        }
+        return; 
+}
+
 
 void setup() {
 
@@ -132,9 +184,9 @@ void loop() {
     } else {
       // the previous operation was reception
       // print data and send another packet
-      String str;
-      radio.getPacketLength();
-      int state = radio.readData(str);
+      uint8_t data[8];
+      //radio.getPacketLength();
+      int state = radio.readData(data,sizeof(data));
 
       if (state == RADIOLIB_ERR_NONE) {
         // packet was successfully received
@@ -142,7 +194,9 @@ void loop() {
 
         // print data of the packet
         Serial.print(F("[SX1262] Data:\t\t"));
-        Serial.println(str);
+
+          bytesToFloat(AccelX, data);
+          Serial.println(AccelX,6);
 
         // print RSSI (Received Signal Strength Indicator)
         Serial.print(F("[SX1262] RSSI:\t\t"));
