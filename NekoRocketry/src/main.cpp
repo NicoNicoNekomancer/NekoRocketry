@@ -1,4 +1,4 @@
-/*
+/* !! Important Info About The Chips And All That !!
    Radio stuff
    https://github.com/jgromes/RadioLib/wiki/Default-configuration#sx126x---lora-modem
    For full API reference, see the GitHub Pages
@@ -6,12 +6,16 @@
 
    IMU stuff
    https://github.com/sparkfun/SparkFun_BMI270_Arduino_Library
+
+   Barometer Stuff AUTHOR: Rob Tillaart
+   https://github.com/RobTillaart/MS5611_SPI
 */
 
 // include the library
-#include <RadioLib.h>
 #include <SPI.h>
-#include "SparkFun_BMI270_Arduino_Library.h"
+#include <RadioLib.h> //Radio LLCC68
+#include "SparkFun_BMI270_Arduino_Library.h" //IMU
+#include "MS5611_SPI.h" //Barometer
 
 BMI270 imu;
 #define INITIATING_NODE
@@ -25,7 +29,7 @@ uint8_t LORAMOSI  = 13;
 uint8_t LORAMISO  = 19;
 uint8_t LORASCK   = 18;
 
-
+//IMU STUFF IMU STUFF IMU STUFF IMU STUFF
 uint32_t IMUclockFrequency = 100000;
 uint8_t  IMUCS    = 5;
 uint8_t IMUMOSI  = 41;
@@ -39,12 +43,82 @@ float GyroX  = 0;
 float GyroY  = 0;
 float GyroZ  = 0;
 
-float returnFloat = 0;
+/*BAROMETER STUFF BAROMETER STUFF BAROMETER STUFF
+  BREAKOUT  MS5611  aka  GY63 - see datasheet
 
-//Initialize message variables// 
-//This is the important stuff as this is defining my data structure
+  SPI    I2C
+              +--------+
+  VCC    VCC  | o      |
+  GND    GND  | o      |
+         SCL  | o      |
+  SDI    SDA  | o      |
+  CSO         | o      |
+  SDO         | o L    |   L = led
+          PS  | o    O |   O = opening  PS = protocol select
+              +--------+
 
-//Plays into the function, but since the max accel is 16g's, and we only get two decimal places, this is 3 bytes being the sign, integer, and decimal
+  PS to VCC  ==>  I2C  (GY-63 board has internal pull up, so not needed)
+  PS to GND  ==>  SPI
+  CS to VCC  ==>  0x76
+  CS to GND  ==>  0x77
+
+
+  Pin Connections For SPI. This is shared for all sensors.
+      
+  SELECT / CSO    7
+  MOSI   / SDI    41
+  MISO   / SDO    40
+  CLOCK  / SCL    42
+
+*/
+uint8_t BarometerCS    = 7;
+uint8_t BarometerMOSI  = 21;// 41
+uint8_t BarometerMISO  = 47; // 40
+uint8_t BarometerSCK   = 17;// 42
+// CS, MOSI, MISO, SCK
+MS5611_SPI MS5611(BarometerCS, BarometerMOSI, BarometerMISO, BarometerSCK);
+// not sure what this is, lol
+uint32_t start, stop;
+
+
+// Initialize message variables// 
+// THIS IS THE IMPORTANT STUFF FOR THE DATA PACKET!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+// Define the number of elements in the data packet. Since I know what I'll have, I can set it all here. 
+// Will flesh out as I go, but the idea is to start with the Callsign, then the IMU, then Barometer, then GPS, and then whatever else I decide to add in
+
+/* This is the CallSign including null terminator. 6 characters is default and then the null. 
+Will have to adjust this to allow for someone with a shorter callsign */
+const int stringLength = 7; 
+
+/* This is for the sensors mainly. 6 come from the IMU, 2 come from the Barometer, */
+const int floatCount = 8;
+
+/* This is just for testing and isnt important at all. wanting to test data types*/
+const int intCount = 3;
+
+// Define the struct for the data packet
+struct DataPacket {
+  char callsign[stringLength];
+  float floatData[floatCount];
+  int intData[intCount];
+};
+
+// Create an instance of the struct
+DataPacket myDataPacket;
+
+uint8_t binaryData[sizeof(myDataPacket)];
+
+// Variables to store extracted values
+char extractedCallsign[stringLength];
+float extractedFloatData[floatCount];
+int extractedIntData[intCount];
+
+
+//end of important stuff !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+
+//Plays into the function
 uint8_t AccelXBIN;
 uint8_t AccelYBIN;
 uint8_t AccelZBIN;
@@ -57,14 +131,17 @@ uint8_t Message;
 
 uint8_t* result = nullptr;
 int totalSize = 0;
+/*
+LLCC68 has the following connections:
+NSS pin:   cs
+DIO1 pin:  irq
+NRST pin:  rst
+BUSY pin:  gpio
 
-// SX1262 has the following connections:
-// NSS pin:   cs
-// DIO1 pin:  irq
-// NRST pin:  rst
-// BUSY pin:  gpio
-// SPI 
-// SPI Settings
+Look at the datasheet to figure out what the pins are, lol.
+
+SPI Settings
+*/
 SPIClass LoraSPI(HSPI);
 SPISettings LoraSPISettings(LORAclockFrequency, MSBFIRST, SPI_MODE0);
 LLCC68 radio = new Module(LORACS, LORAIRQ, LORARST, LORABUSY, LoraSPI, LoraSPISettings); // this one must be used because esp32
@@ -91,44 +168,20 @@ void setFlag(void) {
 
 
 
-//takes in the float from the sensor and makes it binary
-//give it the float and then an unsigned char
-void floatToBinary(const float &num, unsigned char binaryBytes[sizeof(float)])
-{
-        const unsigned char * numPtr = reinterpret_cast<const unsigned char *>(&num); 
-        for (unsigned short i = 0; i < sizeof(float); i++)
-        {
-                binaryBytes[i] = (*(numPtr++)); 
-        }
-        return; 
+//--------------------------------------------------------------------------------------------
+//Encodes the packet as a binary array. 
+void encodeDataPacket() {
+  // Copy the struct to the binary buffer
+  memcpy(binaryData, &myDataPacket, sizeof(myDataPacket));
 }
 //--------------------------------------------------------------------------------------------
-//converts the Binary back to a float
-void bytesToFloat(float &num, unsigned char binaryBytes[sizeof(float)])
-{
-        unsigned char * numPtr = reinterpret_cast<unsigned char *>(&num); 
-        for (unsigned short i = 0; i < sizeof(float); i++)
-        {
-                (*(numPtr++)) = binaryBytes[i]; 
-        }
-        return; 
-}
+
+
 //----------------------------------------------------------------------------------------------
 
-const int maxSize = 4; // Adjust the maximum size as needed
 
-void concatenateArray(const uint8_t newArray[], int newArraySize, uint8_t result[], int& totalSize) {
-    // Ensure we don't exceed the maximum size
-    if (totalSize + newArraySize > maxSize) {
-        Serial.println("Error: Exceeded maximum size");
-        return;
-    }
 
-    // Copy the new array to the end of the result
-    for (int i = 0; i < newArraySize; ++i) {
-        result[totalSize++] = newArray[i];
-    }
-}
+
 
 
 //______________________________________________________________________________________________
@@ -137,6 +190,15 @@ void concatenateArray(const uint8_t newArray[], int newArraySize, uint8_t result
 //
 //______________________________________________________________________________________________
 void setup() {
+  //setting callsign here. Will eventually be some other function but idk how to do that yet, lol
+  //final version will NOT function this way asside from it being a callsign and being in the setup
+  strcpy(myDataPacket.callsign, "KF0HVS");
+
+  //setting random ints for testing reasons. just want to make sure that this can be used for different data types. 
+  //will probs just be a bunch of floats in the final code, but whatever
+  myDataPacket.intData[0] = 123;
+  myDataPacket.intData[1] = 456;
+  myDataPacket.intData[2] = 789;
 
     //setting CS pins to output and forcing high to make sure they are all off
     pinMode(IMUCS, OUTPUT);
@@ -147,6 +209,7 @@ void setup() {
   //start serial communication
   Serial.begin(115200);
 
+  //IMU
   Serial.println("BMI270 Example 2 - Basic Readings SPI");
 
     // Initialize the SPI library
@@ -163,6 +226,12 @@ void setup() {
         delay(1000);
     }
   Serial.println("BMI270 connected!");
+
+
+
+
+
+
 
   //(SCK, MISO, MOSI, CS)
   LoraSPI.begin(LORASCK,LORAMISO,LORAMOSI,LORACS);
@@ -191,6 +260,24 @@ void setup() {
     transmissionState = radio.startTransmit("Sending Intial Handshake");
     transmitFlag = true;
 
+//Barometer
+  while(!Serial);
+  Serial.println();
+  Serial.println(__FILE__);
+  Serial.print("MS5611_SPI_LIB_VERSION: ");
+  Serial.println(MS5611_SPI_LIB_VERSION);
+  if (MS5611.begin() == true)
+  {
+    Serial.println("MS5611 found.");
+  }
+  else
+  {
+    Serial.println("MS5611 not found. halt.");
+    while (1);
+  }
+  Serial.println();
+
+
 }
 void loop() {
     
@@ -198,44 +285,58 @@ void loop() {
   // Get measurements from the sensor. This must be called before accessing
   // the sensor data, otherwise it will never update
   imu.getSensorData();
-    // Get acceleration data
-    AccelX = imu.data.accelX;
-    uint8_t AccelXBIN[sizeof(AccelX)];
-    floatToBinary(AccelX, AccelXBIN);
-    AccelY = imu.data.accelX;
-    uint8_t AccelYBIN[sizeof(AccelY)];
-    floatToBinary(AccelY, AccelYBIN);
-    AccelZ = imu.data.accelX;
-    uint8_t AccelZBIN[sizeof(AccelZ)];
-    floatToBinary(AccelZ, AccelZBIN);
-    GyroX  = imu.data.gyroX;
-    uint8_t GyroXBIN[sizeof(GyroX)];
-    floatToBinary(GyroX, GyroXBIN);
-    GyroY  = imu.data.gyroY;
-    uint8_t GyroYBIN[sizeof(GyroY)];
-    floatToBinary(GyroY, GyroYBIN);
-    GyroZ  = imu.data.gyroZ;
-    uint8_t GyroZBIN[sizeof(GyroZ)];
-    floatToBinary(GyroZ, GyroZBIN);
+    // Get acceleration data in g's
+    //AccelX 
+    myDataPacket.floatData[0] = imu.data.accelX;
 
+    Serial.println(myDataPacket.floatData[0],6);
+    //AccelY 
+    myDataPacket.floatData[1] = imu.data.accelY;
     
-    Serial.println(AccelX,6);
+    //AccelZ 
+    myDataPacket.floatData[2] = imu.data.accelZ;
 
-    bytesToFloat(returnFloat, AccelXBIN);
-    Serial.println(returnFloat,6);
+    // Get gyro data in rad/s 
+    //GyroX  
+    myDataPacket.floatData[3] = imu.data.gyroX;
     
+    //GyroY  
+    myDataPacket.floatData[4] = imu.data.gyroY;
     
-    uint8_t result[maxSize] = {0}; // Initialize result array
-    int totalSize = 0;
+    //GyroZ  
+    myDataPacket.floatData[5] = imu.data.gyroZ;
+    
+  
 
-    concatenateArray(AccelXBIN, sizeof(AccelXBIN), result, totalSize);
+    int BarometerResult = MS5611.read();   // uses default OSR_ULTRA_LOW  (fastest)
+      
+    //BarometerTemperature 
+    myDataPacket.floatData[6] = MS5611.getTemperature();
+    myDataPacket.floatData[7] = MS5611.getPressure();
+
+    Serial.println(myDataPacket.floatData[7],6);
+
+    //encodes the packet as binary. Stored in binaryData
+    encodeDataPacket();
+    
+    Serial.println(sizeof(myDataPacket));
+    for(int i = 0; i < floatCount; i++){
+        Serial.print(myDataPacket.floatData[i]);
+        Serial.print(", ");
+        }
+        Serial.println("");
+    for(int i = 0; i < sizeof(binaryData); i++){
+        Serial.print(binaryData[i]);
+        }
+   Serial.println("End Of Binary");
+    
     
     Serial.println(F("[LLCC68] Sending another packet ... "));
-    transmissionState = radio.startTransmit(result, sizeof(result), 0);
+    transmissionState = radio.startTransmit(binaryData, sizeof(binaryData), 0);
     transmitFlag = true;
 
     
 
-    delay(1000);
+    delay(10);
   }
 
