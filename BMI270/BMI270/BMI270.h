@@ -1,23 +1,28 @@
+#ifndef BMI270_H
+#define BMI270_H
+
+#include <Arduino.h>
 #include <SPI.h>
-// Define pin assignments
-const uint8_t IMUCS = 5;
-const uint8_t IMUMOSI = 41;
-const uint8_t IMUMISO = 40;
-const uint8_t IMUSCK = 42;
-const uint8_t chip_ID = 0x00;
-const uint8_t dummy = 0x00;
-const uint8_t bitflip = 0x80;
-const uint8_t CMD = 0x7E;
-const uint8_t powerCONF = 0x7C;
-const uint8_t ACC_RANGE = 0x41;
-const uint8_t GYR_RANGE = 0x43;
-const uint8_t init_control= 0x59;
-const uint8_t init_ADDR_0 = 0x5b;
-const uint8_t init_array[] = {0x00, 0x00};
-const uint8_t three_array[] = {0x00, 0x00, 0x00};
-const uint8_t features_array[] = {0x00, 0x00,0x00, 0x00,0x00, 0x00,0x00, 0x00,0x00, 0x00,0x00, 0x00,0x00, 0x00,0x00, 0x00,0x00};
-const uint8_t bmi270_maximum_fifo_config_file[] = { 
-     0xc8, 0x2e, 0x00, 0x2e, 0x80, 0x2e, 0x00, 0xb0, 0xc8, 0x2e, 0x00, 0x2e, 0xc8, 0x2e, 0x00, 0x2e, 0x80, 0x2e, 0xc9,
+
+class BMI270 {
+public:
+    BMI270(uint8_t csPin);
+    void begin();
+    void getIMUData(float &accelX, float &accelY, float &accelZ, float &gyroX, float &gyroY, float &gyroZ);
+
+private:
+    uint8_t csPin;
+    uint32_t clockFrequency = 100000;
+    const uint8_t chip_ID = 0x00;
+    const uint8_t dummy = 0x00;
+    const uint8_t bitflip = 0x80;
+    const uint8_t CMD = 0x7E;
+    const uint8_t powerCONF = 0x7C;
+    const uint8_t ACC_RANGE = 0x41;
+    const uint8_t GYR_RANGE = 0x43;
+    const uint8_t init_control= 0x59;
+    const uint8_t bmi270_maximum_fifo_config_file[17] = { 
+             0xc8, 0x2e, 0x00, 0x2e, 0x80, 0x2e, 0x00, 0xb0, 0xc8, 0x2e, 0x00, 0x2e, 0xc8, 0x2e, 0x00, 0x2e, 0x80, 0x2e, 0xc9,
     0x01, 0x80, 0x2e, 0xe2, 0x00, 0xc8, 0x2e, 0x00, 0x2e, 0x80, 0x2e, 0x77, 0xb0, 0x50, 0x30, 0x21, 0x2e, 0x59, 0xf5,
     0x10, 0x30, 0x21, 0x2e, 0x6a, 0xf5, 0x80, 0x2e, 0xaf, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0x09, 0x01, 0x00, 0x22,
     0x00, 0x76, 0x00, 0x00, 0x10, 0x00, 0x10, 0xd1, 0x00, 0xcb, 0xa7, 0x80, 0x2e, 0x00, 0xc1, 0x80, 0x2e, 0x00, 0xc1,
@@ -451,313 +456,17 @@ const uint8_t bmi270_maximum_fifo_config_file[] = {
     0xc1, 0xfd, 0x2d
     };
 
-uint8_t  configcheck = 0;
-uint8_t  IMUData[25];
-uint32_t clockFrequency = 10000000;
+    uint16_t LSB8G = 4096;
+    float LSB2000 = 16.4;
 
-uint16_t LSB8G = 4096;
-float    LSB2000 = 16.4;
+    void testcommunication();
+    void initIMU();
+    void writeReg(uint8_t regAddress, uint8_t data);
+    void writeRegConfig();
+    uint8_t readReg(uint8_t regAddress);
+    int16_t twosComplement(uint8_t lowByte, uint8_t highByte);
+    void writeRegCont(uint8_t regAddress, const uint8_t data[], uint8_t array_size);
+    void getIMUDataRaw(uint8_t data[], uint8_t size);
+};
 
-int16_t  AccelXRAW;
-int16_t  AccelYRAW;
-int16_t  AccelZRAW;
-int16_t  GyroXRAW;
-int16_t  GyroYRAW;
-int16_t  GyroZRAW;
-
-uint8_t  GYR_CAS;
-int8_t   GYR_CAS_Twos;
-
-float    AccelX;
-float    AccelY;
-float    AccelZ;
-float    GyroX;
-float    GyroY;
-float    GyroZ;
-
-
-SPISettings IMUSPISettings(clockFrequency , MSBFIRST, SPI_MODE0);
-
-
-void setup() {
-
-
-  pinMode(IMUCS, OUTPUT);
-  digitalWrite(IMUCS, HIGH);
-  Serial.begin(115200); // Initialize Serial for debugging
-
-  // Initialize SPI communication
-  SPI.begin(IMUSCK, IMUMISO, IMUMOSI, IMUCS);
-
-  // Test communication and initialize the device. 
-  testcommunication();
-
-  initIMU();
-  //Serial.println("Init completed");
-
-}
-
-void loop() {
-  // Your main code can go here if needed
-  getIMUData();
-  Serial.print(AccelX, 4);
-  Serial.print(",");
-  Serial.print(AccelY, 4);
-  Serial.print(",");
-  Serial.print(AccelZ, 4);
-  Serial.print(",");
-  Serial.print(GyroX, 4);
-  Serial.print(",");
-  Serial.print(GyroY, 4);
-  Serial.print(",");
-  Serial.println(GyroZ, 4);
-
-
-
-
-}
-
-
-uint8_t readReg(uint8_t regAddress) {
-  //first one is needed to init spi. not going to question it
-  // Begin SPI transaction
-  SPI.beginTransaction(IMUSPISettings);
-  // Select the device by bringing CSB low
-  digitalWrite(IMUCS, LOW);
-  //sends the register, with a bit flip on bit one to show a read
-  SPI.transfer((regAddress | bitflip));
-  //send a dummy byte
-  SPI.transfer(dummy);
-  //collect responce
-  uint8_t result = SPI.transfer(dummy);
-  
-  // Deselect the device by bringing CSB high
-  digitalWrite(IMUCS, HIGH);
-  // End SPI transaction
-  SPI.endTransaction();
-  
-
-
-  return result;
-}
- 
-
-void writeRegCont(uint8_t regAddress, const uint8_t data[], uint8_t array_size) {
-  // Begin SPI transaction
-  SPI.beginTransaction(IMUSPISettings);
-  // Select the device by bringing CS low
-  digitalWrite(IMUCS, LOW);
-  //send the register
-  SPI.transfer(regAddress);
-  //send the command
-  for(int i = 0; i < array_size; i++){
-
-    SPI.transfer(data[i]);
-
-  }
-  // Deselect the device by bringing CS high
-  digitalWrite(IMUCS, HIGH);
-  // End SPI transaction
-  SPI.endTransaction();
-  
-
-
-}
-
-void writeRegConfig() {
-  int array_size = sizeof(bmi270_maximum_fifo_config_file);
-  int section = array_size / 32;
-  for(int i = 0; i < section; i++){
-    // Begin SPI transaction
-    SPI.beginTransaction(IMUSPISettings);
-    // Select the device by bringing CS low
-    digitalWrite(IMUCS, LOW);
-    SPI.transfer(0x5B);
-  
-    SPI.transfer(0x00);
-  
-    SPI.transfer(0x00+ i);
-  
-    digitalWrite(IMUCS, HIGH);
-    SPI.endTransaction();
-  
-    // Begin SPI transaction
-    SPI.beginTransaction(IMUSPISettings);
-    // Select the device by bringing CS low
-    digitalWrite(IMUCS, LOW);
-    SPI.transfer(0x5E);
-    for(int z = 0; z < 32; z++){
-
-      SPI.transfer(bmi270_maximum_fifo_config_file[z + (32*i)]);
-     
-    }
-    digitalWrite(IMUCS, HIGH);
-    SPI.endTransaction();
-  }
-  if(array_size % 32 != 0)
-  {
-    SPI.beginTransaction(IMUSPISettings);
-    // Select the device by bringing CS low
-    digitalWrite(IMUCS, LOW);
-    SPI.transfer(0x5B);
-    SPI.transfer(0x00);
-    SPI.transfer(0x00 + section);
-    digitalWrite(IMUCS, HIGH);
-    SPI.endTransaction();
-    SPI.beginTransaction(IMUSPISettings);
-    // Select the device by bringing CS low
-    digitalWrite(IMUCS, LOW);
-    for(int i = 0; i < array_size - (section * 32); i++){
-      SPI.transfer(bmi270_maximum_fifo_config_file[i + (32*section)]);
-    
-
-    }
-    digitalWrite(IMUCS, HIGH);
-    SPI.endTransaction();
-  }
-}
-
-void writeReg(uint8_t regAddress, uint8_t data) {
-
-  // Begin SPI transaction
-  SPI.beginTransaction(IMUSPISettings);
-  // Select the device by bringing CS low
-  digitalWrite(IMUCS, LOW);
-  //send the register
-  SPI.transfer(regAddress);
-  //send the command
-  SPI.transfer(data);
-
-  // Deselect the device by bringing CS high
-  digitalWrite(IMUCS, HIGH);
-  // End SPI transaction
-  SPI.endTransaction();
-  
-
-
-}
-
-void testcommunication() {
-  uint8_t chipID = 0;
-  readReg(chip_ID);
-  delayMicroseconds(450);
-  chipID = readReg(chip_ID);
-  delayMicroseconds(450);
-  //soft reset
-  writeReg(CMD, 0xB6);
-  delayMicroseconds(2000);
-}
-
-void initIMU() {
-  //init spi commiunication
-  readReg(chip_ID);
-  delayMicroseconds(450);
-  //dissable Advanced Power Save
-  readReg(powerCONF);
-  delayMicroseconds(450);
-  writeReg(powerCONF, 0x02);
-  //sleep for 450 us
-  delayMicroseconds(450);
-  //prepare config load
-  readReg(init_control);
-  //begin write
-  writeReg(init_control, 0x00);
-  //write the config to the chip
-  writeRegConfig(); 
-  delayMicroseconds(450);
-  readReg(init_control);
-  writeReg(init_control, 0x01);
-  readReg(powerCONF);
-  writeReg(powerCONF, 0x03);
-  delay(20);
-
-  configcheck = readReg(0x21);
-  delayMicroseconds(450);
-  //Performance mode config + setting to 8g and 2000 dps
-  readReg(powerCONF);
-  delayMicroseconds(450);
-  writeReg(powerCONF, 0x02);
-  delayMicroseconds(450);
-  writeReg(0x2F, 0x00);
-  writeRegCont(0xB0, features_array, sizeof(features_array));
-  readReg(powerCONF);
-  writeReg(powerCONF, 0x03);
-  readReg(0x7D);
-  delayMicroseconds(450);
-  writeReg(0x7D,0x06);
-  delayMicroseconds(450);
-  writeRegCont(0xC0, three_array, sizeof(three_array));
-  delayMicroseconds(450);
-  readReg(powerCONF);
-  delayMicroseconds(450);
-  writeReg(powerCONF, 0x03);
-  delayMicroseconds(450);
-  writeRegCont(0xC2, three_array, sizeof(three_array));
-  delayMicroseconds(450);
-  readReg(powerCONF);
-  delayMicroseconds(450);
-  writeReg(powerCONF, 0x03);
-  readReg(powerCONF);
-  delayMicroseconds(450);
-  writeReg(powerCONF, 0x03);
-  delayMicroseconds(450);
-
-  writeReg(ACC_RANGE, 0x02);
-  delayMicroseconds(450);
-  writeReg(GYR_RANGE, 0x08);
-  delayMicroseconds(450);
-  writeReg(0x42, 0xCF);
-  delayMicroseconds(450);
-  writeReg(0x40, 0x8F);
-}
-
-void getIMUData() {
-// Begin SPI transaction
-  SPI.beginTransaction(IMUSPISettings);
-  // Select the device by bringing CS low
-  digitalWrite(IMUCS, LOW);
-  //send the register
-  SPI.transfer(0x83);
-  //send the command
-  for(int i = 0; i < sizeof(IMUData); i++){
-    IMUData[i] = SPI.transfer(dummy);
-  }
-  // Deselect the device by bringing CS high
-  digitalWrite(IMUCS, HIGH);
-  // End SPI transaction
-  SPI.endTransaction();
-
-  GYR_CAS = readReg(0x3C);
-  GYR_CAS_Twos = (GYR_CAS & 0x40) ? (GYR_CAS | 0x80) : GYR_CAS;
-
-  AccelXRAW = twosComplement(IMUData[10], IMUData[11]);
-  AccelX = static_cast<float>(AccelXRAW) / LSB8G;
-  AccelYRAW = twosComplement(IMUData[12], IMUData[13]);
-  AccelY = static_cast<float>(AccelYRAW) / LSB8G;
-  AccelZRAW = twosComplement(IMUData[14], IMUData[15]);
-  AccelZ = static_cast<float>(AccelZRAW) / LSB8G;
-
-  GyroYRAW = twosComplement(IMUData[18], IMUData[19]);
-  GyroY = static_cast<float>(GyroYRAW) / LSB2000;
-  GyroZRAW = twosComplement(IMUData[20], IMUData[21]);
-  GyroZ = static_cast<float>(GyroZRAW) / LSB2000;
-
-  GyroXRAW = twosComplement(IMUData[16], IMUData[17]);
-  GyroXRAW = GyroXRAW - (GYR_CAS_Twos * GyroZRAW / 512);
-  GyroX = static_cast<float>(GyroXRAW) / LSB2000;
-}
-
-int16_t twosComplement(uint8_t lowByte, uint8_t highByte) {
-  // Combine the two bytes into a 16-bit signed integer
-  int16_t result = (highByte << 8) | lowByte;
-  
-  // Check if the number is negative (if the most significant bit is set)
-  if (result & 0x8000) {
-    // Perform two's complement operation
-    result = -((~result) + 1);
-  }
-  
-  return result;
-}
-
-
+#endif

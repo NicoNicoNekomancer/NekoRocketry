@@ -20,19 +20,19 @@ bool _compensation = true;
 
 // Define software SPI pin assignments
 const int BarometerCS = 7;
-const int BarometerMOSI = 21;
-const int BarometerMISO = 47;
-const int BarometerSCK = 17;
+const int BarometerMOSI = 41;
+const int BarometerMISO = 40;
+const int BarometerSCK = 42;
 
 // Define custom SPISettings named barometerSPISettings
-SPISettings barometerSPISettings(10000000, MSBFIRST, SPI_MODE0);
+SPISettings barometerSPISettings(1000000, MSBFIRST, SPI_MODE0);
 
 void setup() {
   Serial.begin(115200);
 
   pinMode(BarometerCS, OUTPUT);
   SPI.begin(BarometerSCK, BarometerMISO, BarometerMOSI, BarometerCS);
-
+  delay(100);
   // Begin transaction with custom SPISettings
   SPI.beginTransaction(barometerSPISettings);
   digitalWrite(BarometerCS, LOW);
@@ -44,7 +44,7 @@ void setup() {
 
   digitalWrite(BarometerCS, HIGH);
   SPI.endTransaction();
-
+  delay(100);
   /*
     Send Prom Command. Shall be executed once after reset by the user to read the content of the calibration PROM and to calculate the calibration coefficients.
     There are 8 total addresses resulting in a total memory of 128 bit. Address 0 contains factory data and the setup, addresses 1-6 calibration coefficients and address 7 contains

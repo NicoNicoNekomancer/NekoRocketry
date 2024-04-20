@@ -49,7 +49,7 @@ void setup() {
   LoraSPI.begin(LORASCK, LORAMISO, LORAMOSI, LORACS);
 
   // Initialize LoRa module with specific parameters
-  int state = radio.begin(420.0, 500.0, 11, 5, 0x34, 20, 8, 1.6, false);
+  int state = radio.begin(420.0, 500.0, 11, 8, 0x34, 20, 8, 1.6, false);
 
   if (state == RADIOLIB_ERR_NONE) {
     Serial.println(F("[SX1262] Initializing success!"));

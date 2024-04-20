@@ -8,7 +8,10 @@ BMI270 imu;
 
 uint8_t chipSelectPin = 5;
 uint32_t clockFrequency = 100000;
-
+const uint8_t IMUCS = 5;
+const uint8_t IMUMOSI = 41;
+const uint8_t IMUMISO = 40;
+const uint8_t IMUSCK = 42;
 void setup()
 {
     //make sure that all spi are high
@@ -21,7 +24,7 @@ void setup()
     Serial.println("BMI270 Example 2 - Basic Readings SPI");
 
     // Initialize the SPI library
-    SPI.begin(18, 19, 13, 5);
+      SPI.begin(IMUSCK, IMUMISO, IMUMOSI, IMUCS);
 
     // Check if sensor is connected and initialize
     // Clock frequency is optional (defaults to 100kHz)

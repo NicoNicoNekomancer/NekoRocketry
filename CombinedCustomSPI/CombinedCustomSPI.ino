@@ -1,9 +1,15 @@
-#include <SPI.h>
-// Define pin assignments
-const uint8_t IMUCS = 5;
-const uint8_t IMUMOSI = 41;
-const uint8_t IMUMISO = 40;
-const uint8_t IMUSCK = 42;
+#include "SPI.h"
+
+// Barometer Define commands (page 10 of Datasheet)
+const uint8_t MS5611_CMD_READ_ADC = 0x00;
+const uint8_t MS5611_CMD_READ_PROM_FIRST = 0xA0;
+const uint8_t MS5611_CMD_READ_PROM_LAST = 0xAE;
+const uint8_t MS5611_CMD_RESET = 0x1E;
+const uint8_t MS5611_CMD_CONVERT_D1 = 0x48; // OSR 4096
+const uint8_t MS5611_CMD_CONVERT_D2 = 0x58; // OSR 4096
+// Define Factory Constants
+uint16_t Constants[8];
+//IMU commands and etc
 const uint8_t chip_ID = 0x00;
 const uint8_t dummy = 0x00;
 const uint8_t bitflip = 0x80;
@@ -450,55 +456,79 @@ const uint8_t bmi270_maximum_fifo_config_file[] = {
     0x80, 0x2e, 0x00, 0xc1, 0x80, 0x2e, 0x00, 0xc1, 0x80, 0x2e, 0x00, 0xc1, 0x80, 0x2e, 0x00, 0xc1, 0x80, 0x2e, 0x00,
     0xc1, 0xfd, 0x2d
     };
-
+//other imu constants
 uint8_t  configcheck = 0;
 uint8_t  IMUData[25];
-uint32_t clockFrequency = 10000000;
-
 uint16_t LSB8G = 4096;
 float    LSB2000 = 16.4;
 
-int16_t  AccelXRAW;
-int16_t  AccelYRAW;
-int16_t  AccelZRAW;
-int16_t  GyroXRAW;
-int16_t  GyroYRAW;
-int16_t  GyroZRAW;
-
+// Define data constants
+uint32_t D1, D2, TEMP, P;
+int64_t OFF, SENS;
+int16_t AccelXRAW, AccelYRAW, AccelZRAW, GyroXRAW, GyroYRAW, GyroZRAW;
+bool _compensation = true;
 uint8_t  GYR_CAS;
 int8_t   GYR_CAS_Twos;
+float AccelX, AccelY, AccelZ, GyroX, GyroY, GyroZ;
 
-float    AccelX;
-float    AccelY;
-float    AccelZ;
-float    GyroX;
-float    GyroY;
-float    GyroZ;
+// Define software SPI pin assignments
+const int BarometerCS = 7;
+const int BarometerMOSI = 41;
+const int BarometerMISO = 40;
+const int BarometerSCK = 42;
 
+const uint8_t IMUCS = 5;
+const uint8_t IMUMOSI = 41;
+const uint8_t IMUMISO = 40;
+const uint8_t IMUSCK = 42;
 
+// Define custom SPISettings named barometerSPISettings
+uint32_t clockFrequency = 100000;
+SPISettings barometerSPISettings(clockFrequency, MSBFIRST, SPI_MODE0);
 SPISettings IMUSPISettings(clockFrequency , MSBFIRST, SPI_MODE0);
-
 
 void setup() {
 
+  //i am sped
+  //setCpuFrequencyMhz(240);
+  Serial.begin(115200);
 
+  pinMode(BarometerCS, OUTPUT);
+  digitalWrite(BarometerCS, HIGH);
   pinMode(IMUCS, OUTPUT);
   digitalWrite(IMUCS, HIGH);
-  Serial.begin(115200); // Initialize Serial for debugging
 
-  // Initialize SPI communication
-  SPI.begin(IMUSCK, IMUMISO, IMUMOSI, IMUCS);
-
+  SPI.begin(BarometerSCK, BarometerMISO, BarometerMOSI, BarometerCS);
   // Test communication and initialize the device. 
+  initBarometer();
   testcommunication();
-
   initIMU();
-  //Serial.println("Init completed");
 
 }
 
+
+
+
+
+
+
 void loop() {
-  // Your main code can go here if needed
+  // Read raw sensor values
+  D1 = barometerRead(MS5611_CMD_CONVERT_D1);
+  D2 = barometerRead(MS5611_CMD_CONVERT_D2);
+
+  // Perform compensation calculations by passing D1 and D2
+  calculateCompensation(D1, D2);
+
+  // Print compensated temperature and pressure to the serial monitor with decimal places
+  Serial.print("Compensated Temperature: ");
+  Serial.print(TEMP / 100.0); // Assuming two decimal places
+  Serial.println(" degrees Celsius");
+
+  Serial.print("Compensated Pressure: ");
+  Serial.print(P / 100.0); // Assuming two decimal places
+  Serial.println(" Pascals");
+
   getIMUData();
   Serial.print(AccelX, 4);
   Serial.print(",");
@@ -512,11 +542,101 @@ void loop() {
   Serial.print(",");
   Serial.println(GyroZ, 4);
 
-
-
-
 }
 
+
+
+
+//Reads the data from the barometer
+uint32_t barometerRead(uint8_t command) {
+  uint32_t result = 0;
+
+  // Start the transaction
+  SPI.beginTransaction(barometerSPISettings);
+
+  // Send the command
+  digitalWrite(BarometerCS, LOW);
+  SPI.transfer(command);
+  digitalWrite(BarometerCS, HIGH);
+  // Introduce a delay of 8.22 milliseconds. From datasheet pg 11
+  delayMicroseconds(8220);
+
+  // Send the read ADC command
+  digitalWrite(BarometerCS, LOW);
+  SPI.transfer(MS5611_CMD_READ_ADC);
+
+  // Get the first byte
+  uint8_t byte1 = SPI.transfer(0);
+
+  // Get the second byte
+  uint8_t byte2 = SPI.transfer(0);
+
+  // Get the third byte
+  uint8_t byte3 = SPI.transfer(0);
+
+  // Combine into a 32-bit int. It's a 24-bit number
+  result = (static_cast<uint32_t>(byte1) << 16) |
+           (static_cast<uint32_t>(byte2) << 8) |
+           static_cast<uint32_t>(byte3);
+
+  // End the transaction
+  digitalWrite(BarometerCS, HIGH);
+  SPI.endTransaction();
+
+  // Return the result
+  return result;
+}
+
+//Calculates the compensation for the barometer
+void calculateCompensation(uint32_t D1, uint32_t D2) {
+  // Assuming dT is int32_t with size 25 bits
+  int32_t dT = D2 - (Constants[5] << 8);
+
+  // Ensure that dT falls within the specified range
+  dT = constrain(dT, -16776960, 16777216);
+
+  // Assuming TEMP is signed 32-bit with size 41 bits
+  TEMP = 2000 + ((int64_t)dT * Constants[6]) / (1 << 23);
+
+  // Assuming OFF and SENS are int64_t with size 41 bits
+  OFF = (Constants[2] * (1LL << 16)) + ((Constants[4] * dT) / (1 << 7));
+  SENS = (Constants[1] * (1LL << 15)) + ((Constants[3] * dT) / (1 << 8));
+
+  // Ensure that OFF and SENS fall within the specified ranges
+  OFF = constrain(OFF, -8589672450LL, 12884705280LL);
+  SENS = constrain(SENS, -4294836225LL, 6442352640LL);
+
+  // Assuming P is int32_t with size 58 bits
+  P = ((D1 * SENS) / (1LL << 21) - OFF) / (1 << 15);
+}
+
+
+/*
+    Send Prom Command. Shall be executed once after reset by the user to read the content of the calibration PROM and to calculate the calibration coefficients.
+    There are 8 total addresses resulting in a total memory of 128 bit. Address 0 contains factory data and the setup, addresses 1-6 calibration coefficients and address 7 contains
+    the serial code and CRC. The command sequence is 8 bits long with a 16 bit result which is clocked with the MSB First
+  */
+void initBarometer() {
+  // Begin transaction with custom SPISettings
+  SPI.beginTransaction(barometerSPISettings);
+  digitalWrite(BarometerCS, LOW);
+  // Send Reset command. Sent once after power-on to make sure that the calibration PROM gets loaded into the internal register
+  SPI.transfer(MS5611_CMD_RESET);
+  // Introduce a delay of 2.8 milliseconds. From datasheet pg 10
+  delayMicroseconds(2800);
+  digitalWrite(BarometerCS, HIGH);
+  SPI.endTransaction();
+for (uint8_t command = MS5611_CMD_READ_PROM_FIRST; command <= MS5611_CMD_READ_PROM_LAST; command += 2) {
+    SPI.beginTransaction(barometerSPISettings);
+    digitalWrite(BarometerCS, LOW);
+    // Send the command
+    SPI.transfer(command);
+    // Read the 16-bit value
+    Constants[(command - MS5611_CMD_READ_PROM_FIRST) / 2] = SPI.transfer16(0);
+    digitalWrite(BarometerCS, HIGH);
+    SPI.endTransaction();
+  }
+}
 
 uint8_t readReg(uint8_t regAddress) {
   //first one is needed to init spi. not going to question it
@@ -536,7 +656,7 @@ uint8_t readReg(uint8_t regAddress) {
   // End SPI transaction
   SPI.endTransaction();
   
-
+  delayMicroseconds(16);
 
   return result;
 }
@@ -560,7 +680,7 @@ void writeRegCont(uint8_t regAddress, const uint8_t data[], uint8_t array_size) 
   // End SPI transaction
   SPI.endTransaction();
   
-
+  delayMicroseconds(16);
 
 }
 
@@ -573,14 +693,14 @@ void writeRegConfig() {
     // Select the device by bringing CS low
     digitalWrite(IMUCS, LOW);
     SPI.transfer(0x5B);
-  
+    delayMicroseconds(16);
     SPI.transfer(0x00);
-  
+    delayMicroseconds(16);
     SPI.transfer(0x00+ i);
-  
+    delayMicroseconds(16);
     digitalWrite(IMUCS, HIGH);
     SPI.endTransaction();
-  
+    delayMicroseconds(16);
     // Begin SPI transaction
     SPI.beginTransaction(IMUSPISettings);
     // Select the device by bringing CS low
@@ -589,7 +709,7 @@ void writeRegConfig() {
     for(int z = 0; z < 32; z++){
 
       SPI.transfer(bmi270_maximum_fifo_config_file[z + (32*i)]);
-     
+       delayMicroseconds(16);
     }
     digitalWrite(IMUCS, HIGH);
     SPI.endTransaction();
@@ -609,7 +729,7 @@ void writeRegConfig() {
     digitalWrite(IMUCS, LOW);
     for(int i = 0; i < array_size - (section * 32); i++){
       SPI.transfer(bmi270_maximum_fifo_config_file[i + (32*section)]);
-    
+      delayMicroseconds(16);
 
     }
     digitalWrite(IMUCS, HIGH);
@@ -633,29 +753,36 @@ void writeReg(uint8_t regAddress, uint8_t data) {
   // End SPI transaction
   SPI.endTransaction();
   
-
+  delayMicroseconds(16);
 
 }
 
 void testcommunication() {
   uint8_t chipID = 0;
+  while(chipID == 0){
   readReg(chip_ID);
-  delayMicroseconds(450);
   chipID = readReg(chip_ID);
-  delayMicroseconds(450);
+  // Check if chip ID is as expected (0x24)
+  if (chipID == 0x24) { 
+    //Serial.print("Communication successful. Chip ID: 0x");
+    //Serial.println(chipID, HEX);
+  } else {
+    //Serial.print("Communication failed. Unexpected Chip ID: 0x");
+    //Serial.println(chipID, HEX);
+    //Serial.println("Retrying test communiction. If this continues to fail, the system is faulty.");
+  }
   //soft reset
   writeReg(CMD, 0xB6);
   delayMicroseconds(2000);
+}
 }
 
 void initIMU() {
   //init spi commiunication
   readReg(chip_ID);
-  delayMicroseconds(450);
   //dissable Advanced Power Save
   readReg(powerCONF);
-  delayMicroseconds(450);
-  writeReg(powerCONF, 0x02);
+  writeReg(powerCONF, 0x00);
   //sleep for 450 us
   delayMicroseconds(450);
   //prepare config load
@@ -667,48 +794,22 @@ void initIMU() {
   delayMicroseconds(450);
   readReg(init_control);
   writeReg(init_control, 0x01);
-  readReg(powerCONF);
-  writeReg(powerCONF, 0x03);
-  delay(20);
-
+  delayMicroseconds(450);
   configcheck = readReg(0x21);
-  delayMicroseconds(450);
+  if(configcheck == 1){
+    //Serial.println("config has loaded");
+  }
+  else{
+    //Serial.println("config has failed to load");
+  }
   //Performance mode config + setting to 8g and 2000 dps
-  readReg(powerCONF);
-  delayMicroseconds(450);
-  writeReg(powerCONF, 0x02);
-  delayMicroseconds(450);
-  writeReg(0x2F, 0x00);
-  writeRegCont(0xB0, features_array, sizeof(features_array));
-  readReg(powerCONF);
-  writeReg(powerCONF, 0x03);
-  readReg(0x7D);
-  delayMicroseconds(450);
-  writeReg(0x7D,0x06);
-  delayMicroseconds(450);
-  writeRegCont(0xC0, three_array, sizeof(three_array));
-  delayMicroseconds(450);
-  readReg(powerCONF);
-  delayMicroseconds(450);
-  writeReg(powerCONF, 0x03);
-  delayMicroseconds(450);
-  writeRegCont(0xC2, three_array, sizeof(three_array));
-  delayMicroseconds(450);
-  readReg(powerCONF);
-  delayMicroseconds(450);
-  writeReg(powerCONF, 0x03);
-  readReg(powerCONF);
-  delayMicroseconds(450);
-  writeReg(powerCONF, 0x03);
-  delayMicroseconds(450);
-
+  writeReg(0x7D, 0x0E);
+  writeReg(0x40, 0xEC); //a8 was default
+  writeReg(0x42, 0xDD);//a9 was default normal from datasheet
   writeReg(ACC_RANGE, 0x02);
-  delayMicroseconds(450);
   writeReg(GYR_RANGE, 0x08);
-  delayMicroseconds(450);
-  writeReg(0x42, 0xCF);
-  delayMicroseconds(450);
-  writeReg(0x40, 0x8F);
+  writeReg(0x7C, 0x02);
+
 }
 
 void getIMUData() {
@@ -726,7 +827,7 @@ void getIMUData() {
   digitalWrite(IMUCS, HIGH);
   // End SPI transaction
   SPI.endTransaction();
-
+  delayMicroseconds(16);
   GYR_CAS = readReg(0x3C);
   GYR_CAS_Twos = (GYR_CAS & 0x40) ? (GYR_CAS | 0x80) : GYR_CAS;
 
@@ -759,5 +860,6 @@ int16_t twosComplement(uint8_t lowByte, uint8_t highByte) {
   
   return result;
 }
+
 
 

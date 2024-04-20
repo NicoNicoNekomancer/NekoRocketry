@@ -1,21 +1,5 @@
-#include <SPI.h>
-// Define pin assignments
-const uint8_t IMUCS = 5;
-const uint8_t IMUMOSI = 41;
-const uint8_t IMUMISO = 40;
-const uint8_t IMUSCK = 42;
-const uint8_t chip_ID = 0x00;
-const uint8_t dummy = 0x00;
-const uint8_t bitflip = 0x80;
-const uint8_t CMD = 0x7E;
-const uint8_t powerCONF = 0x7C;
-const uint8_t ACC_RANGE = 0x41;
-const uint8_t GYR_RANGE = 0x43;
-const uint8_t init_control= 0x59;
-const uint8_t init_ADDR_0 = 0x5b;
-const uint8_t init_array[] = {0x00, 0x00};
-const uint8_t three_array[] = {0x00, 0x00, 0x00};
-const uint8_t features_array[] = {0x00, 0x00,0x00, 0x00,0x00, 0x00,0x00, 0x00,0x00, 0x00,0x00, 0x00,0x00, 0x00,0x00, 0x00,0x00};
+#include "IMU.h"
+
 const uint8_t bmi270_maximum_fifo_config_file[] = { 
      0xc8, 0x2e, 0x00, 0x2e, 0x80, 0x2e, 0x00, 0xb0, 0xc8, 0x2e, 0x00, 0x2e, 0xc8, 0x2e, 0x00, 0x2e, 0x80, 0x2e, 0xc9,
     0x01, 0x80, 0x2e, 0xe2, 0x00, 0xc8, 0x2e, 0x00, 0x2e, 0x80, 0x2e, 0x77, 0xb0, 0x50, 0x30, 0x21, 0x2e, 0x59, 0xf5,
@@ -451,79 +435,35 @@ const uint8_t bmi270_maximum_fifo_config_file[] = {
     0xc1, 0xfd, 0x2d
     };
 
-uint8_t  configcheck = 0;
-uint8_t  IMUData[25];
-uint32_t clockFrequency = 10000000;
 
-uint16_t LSB8G = 4096;
-float    LSB2000 = 16.4;
-
-int16_t  AccelXRAW;
-int16_t  AccelYRAW;
-int16_t  AccelZRAW;
-int16_t  GyroXRAW;
-int16_t  GyroYRAW;
-int16_t  GyroZRAW;
-
-uint8_t  GYR_CAS;
-int8_t   GYR_CAS_Twos;
-
-float    AccelX;
-float    AccelY;
-float    AccelZ;
-float    GyroX;
-float    GyroY;
-float    GyroZ;
-
-
-SPISettings IMUSPISettings(clockFrequency , MSBFIRST, SPI_MODE0);
-
-
-void setup() {
-
-
-  pinMode(IMUCS, OUTPUT);
-  digitalWrite(IMUCS, HIGH);
-  Serial.begin(115200); // Initialize Serial for debugging
-
-  // Initialize SPI communication
-  SPI.begin(IMUSCK, IMUMISO, IMUMOSI, IMUCS);
-
-  // Test communication and initialize the device. 
-  testcommunication();
-
-  initIMU();
-  //Serial.println("Init completed");
-
+IMU::IMU(int csPin, int mosiPin, int misoPin, int sckPin, int clock) {
+    _csPin = csPin;
+    _mosiPin = mosiPin;
+    _misoPin = misoPin;
+    _sckPin = sckPin;
+    _spiSettings = SPISettings(clock, MSBFIRST, SPI_MODE0);
 }
 
-void loop() {
-  // Your main code can go here if needed
-  getIMUData();
-  Serial.print(AccelX, 4);
-  Serial.print(",");
-  Serial.print(AccelY, 4);
-  Serial.print(",");
-  Serial.print(AccelZ, 4);
-  Serial.print(",");
-  Serial.print(GyroX, 4);
-  Serial.print(",");
-  Serial.print(GyroY, 4);
-  Serial.print(",");
-  Serial.println(GyroZ, 4);
-
-
-
-
+void IMU::begin() {
+    pinMode(_csPin, OUTPUT);
+    digitalWrite(_csPin, HIGH);
+    //SPI.setCS(_csPin);
+    SPI.setRX(_misoPin);
+    SPI.setTX(_mosiPin);
+    SPI.setSCK(_sckPin);
+    SPI.begin();
+    delay(100);
+    testcommunication();
+    initIMU();
 }
 
 
-uint8_t readReg(uint8_t regAddress) {
+uint8_t IMU::readReg(uint8_t regAddress) {
   //first one is needed to init spi. not going to question it
   // Begin SPI transaction
-  SPI.beginTransaction(IMUSPISettings);
+  SPI.beginTransaction(_spiSettings);
   // Select the device by bringing CSB low
-  digitalWrite(IMUCS, LOW);
+  digitalWrite(_csPin, LOW);
   //sends the register, with a bit flip on bit one to show a read
   SPI.transfer((regAddress | bitflip));
   //send a dummy byte
@@ -532,7 +472,7 @@ uint8_t readReg(uint8_t regAddress) {
   uint8_t result = SPI.transfer(dummy);
   
   // Deselect the device by bringing CSB high
-  digitalWrite(IMUCS, HIGH);
+  digitalWrite(_csPin, HIGH);
   // End SPI transaction
   SPI.endTransaction();
   
@@ -542,11 +482,11 @@ uint8_t readReg(uint8_t regAddress) {
 }
  
 
-void writeRegCont(uint8_t regAddress, const uint8_t data[], uint8_t array_size) {
+void IMU::writeRegCont(uint8_t regAddress, const uint8_t data[], uint8_t array_size) {
   // Begin SPI transaction
-  SPI.beginTransaction(IMUSPISettings);
+  SPI.beginTransaction(_spiSettings);
   // Select the device by bringing CS low
-  digitalWrite(IMUCS, LOW);
+  digitalWrite(_csPin, LOW);
   //send the register
   SPI.transfer(regAddress);
   //send the command
@@ -556,7 +496,7 @@ void writeRegCont(uint8_t regAddress, const uint8_t data[], uint8_t array_size) 
 
   }
   // Deselect the device by bringing CS high
-  digitalWrite(IMUCS, HIGH);
+  digitalWrite(_csPin, HIGH);
   // End SPI transaction
   SPI.endTransaction();
   
@@ -564,72 +504,72 @@ void writeRegCont(uint8_t regAddress, const uint8_t data[], uint8_t array_size) 
 
 }
 
-void writeRegConfig() {
+void IMU::writeRegConfig() {
   int array_size = sizeof(bmi270_maximum_fifo_config_file);
   int section = array_size / 32;
   for(int i = 0; i < section; i++){
     // Begin SPI transaction
-    SPI.beginTransaction(IMUSPISettings);
+    SPI.beginTransaction(_spiSettings);
     // Select the device by bringing CS low
-    digitalWrite(IMUCS, LOW);
+    digitalWrite(_csPin, LOW);
     SPI.transfer(0x5B);
   
     SPI.transfer(0x00);
   
     SPI.transfer(0x00+ i);
   
-    digitalWrite(IMUCS, HIGH);
+    digitalWrite(_csPin, HIGH);
     SPI.endTransaction();
   
     // Begin SPI transaction
-    SPI.beginTransaction(IMUSPISettings);
+    SPI.beginTransaction(_spiSettings);
     // Select the device by bringing CS low
-    digitalWrite(IMUCS, LOW);
+    digitalWrite(_csPin, LOW);
     SPI.transfer(0x5E);
     for(int z = 0; z < 32; z++){
 
       SPI.transfer(bmi270_maximum_fifo_config_file[z + (32*i)]);
      
     }
-    digitalWrite(IMUCS, HIGH);
+    digitalWrite(_csPin, HIGH);
     SPI.endTransaction();
   }
   if(array_size % 32 != 0)
   {
-    SPI.beginTransaction(IMUSPISettings);
+    SPI.beginTransaction(_spiSettings);
     // Select the device by bringing CS low
-    digitalWrite(IMUCS, LOW);
+    digitalWrite(_csPin, LOW);
     SPI.transfer(0x5B);
     SPI.transfer(0x00);
     SPI.transfer(0x00 + section);
-    digitalWrite(IMUCS, HIGH);
+    digitalWrite(_csPin, HIGH);
     SPI.endTransaction();
-    SPI.beginTransaction(IMUSPISettings);
+    SPI.beginTransaction(_spiSettings);
     // Select the device by bringing CS low
-    digitalWrite(IMUCS, LOW);
+    digitalWrite(_csPin, LOW);
     for(int i = 0; i < array_size - (section * 32); i++){
       SPI.transfer(bmi270_maximum_fifo_config_file[i + (32*section)]);
     
 
     }
-    digitalWrite(IMUCS, HIGH);
+    digitalWrite(_csPin, HIGH);
     SPI.endTransaction();
   }
 }
 
-void writeReg(uint8_t regAddress, uint8_t data) {
+void IMU::writeReg(uint8_t regAddress, uint8_t data) {
 
   // Begin SPI transaction
-  SPI.beginTransaction(IMUSPISettings);
+  SPI.beginTransaction(_spiSettings);
   // Select the device by bringing CS low
-  digitalWrite(IMUCS, LOW);
+  digitalWrite(_csPin, LOW);
   //send the register
   SPI.transfer(regAddress);
   //send the command
   SPI.transfer(data);
 
   // Deselect the device by bringing CS high
-  digitalWrite(IMUCS, HIGH);
+  digitalWrite(_csPin, HIGH);
   // End SPI transaction
   SPI.endTransaction();
   
@@ -637,7 +577,7 @@ void writeReg(uint8_t regAddress, uint8_t data) {
 
 }
 
-void testcommunication() {
+void IMU::testcommunication() {
   uint8_t chipID = 0;
   readReg(chip_ID);
   delayMicroseconds(450);
@@ -648,7 +588,7 @@ void testcommunication() {
   delayMicroseconds(2000);
 }
 
-void initIMU() {
+void IMU::initIMU() {
   //init spi commiunication
   readReg(chip_ID);
   delayMicroseconds(450);
@@ -711,11 +651,11 @@ void initIMU() {
   writeReg(0x40, 0x8F);
 }
 
-void getIMUData() {
+void IMU::readData(float &AccelX, float &AccelY, float &AccelZ, float &GyroX, float &GyroY, float &GyroZ,float &IMUTemp) {
 // Begin SPI transaction
-  SPI.beginTransaction(IMUSPISettings);
+  SPI.beginTransaction(_spiSettings);
   // Select the device by bringing CS low
-  digitalWrite(IMUCS, LOW);
+  digitalWrite(_csPin, LOW);
   //send the register
   SPI.transfer(0x83);
   //send the command
@@ -723,13 +663,17 @@ void getIMUData() {
     IMUData[i] = SPI.transfer(dummy);
   }
   // Deselect the device by bringing CS high
-  digitalWrite(IMUCS, HIGH);
+  digitalWrite(_csPin, HIGH);
   // End SPI transaction
   SPI.endTransaction();
 
+  TempRaw1 = readReg(0x22);
+  TempRaw2 = readReg(0x23);
   GYR_CAS = readReg(0x3C);
-  GYR_CAS_Twos = (GYR_CAS & 0x40) ? (GYR_CAS | 0x80) : GYR_CAS;
 
+  GYR_CAS_Twos = (GYR_CAS & 0x40) ? (GYR_CAS | 0x80) : GYR_CAS;
+  IMUTemp =(float)(((float)((int16_t)(twosComplement(TempRaw1, TempRaw2)))) / 512.0) + 23.0;
+  
   AccelXRAW = twosComplement(IMUData[10], IMUData[11]);
   AccelX = static_cast<float>(AccelXRAW) / LSB8G;
   AccelYRAW = twosComplement(IMUData[12], IMUData[13]);
@@ -747,7 +691,7 @@ void getIMUData() {
   GyroX = static_cast<float>(GyroXRAW) / LSB2000;
 }
 
-int16_t twosComplement(uint8_t lowByte, uint8_t highByte) {
+int16_t IMU::twosComplement(uint8_t lowByte, uint8_t highByte) {
   // Combine the two bytes into a 16-bit signed integer
   int16_t result = (highByte << 8) | lowByte;
   
