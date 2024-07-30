@@ -7,15 +7,24 @@ import json
 import os
 from tkinter import ttk  # Needed for the combo box
 import tkinter as tk
+import time
 
-def read_from_serial(ser, text):
+def read_from_serial(text):
+    global ser
     while True:
-        if ser.in_waiting > 0:
-            line = ser.readline().decode('utf-8').strip()
-            text.insert(tk.END, f"Received line: {line}\n")  # Display the line in the text widget
-            text.see(tk.END)  # Auto-scroll to the end
+        try:
+            if ser is not None and ser.in_waiting > 0:
+                line = ser.readline().decode('utf-8').strip()
+                text.insert(tk.END, f"Received line: {line}\n")  # Display the line in the text widget
+                text.see(tk.END)  # Auto-scroll to the end
+        except serial.SerialException:
+            text.insert(tk.END, "Device disconnected.\n")
+            ser = None
 
 def send_data(ser, text, entries, pressureTransducer, altitudeUnit):
+    if ser is None:
+        text.insert(tk.END, "No device connected. Cannot send data.\n")
+        return
     text.insert(tk.END, "Button1 pressed. Sending data...\n")
     ser.write(b'153\n')  # Send 153 to enter READ state
     text.insert(tk.END, "Data sent.\nWaiting for the handshake message...\n")
@@ -53,14 +62,28 @@ def send_data(ser, text, entries, pressureTransducer, altitudeUnit):
     with open('config.json', 'w') as f:
         json.dump({name: entry.get() for name, entry in entries.items()}, f)
 
-# Automatically find the COM port
-ports = list(serial.tools.list_ports.comports())
-for p in ports:
-    if "USB Serial Device" in p.description:
-        port = p.device
-        break
+def find_device(vid, pids, text):
+    global ser
+    while True:
+        ports = list(serial.tools.list_ports.comports())
+        for p in ports:
+            if p.vid == vid and p.pid in pids and "USB Serial Device" in p.description:
+                if p.pid == 0x8CB0:
+                    device_name = "Nekonet Receiver"
+                elif p.pid == 0x5B99:
+                    device_name = "NekoNav"
+                if ser is None or ser.port != p.device:
+                    if ser is not None:
+                        ser.close()  # Close the previous serial connection
+                    ser = serial.Serial(p.device, 115200)  # Adjust baud rate as needed
+                    text.insert(tk.END, f"Connected to {device_name} on port {p.device}\n")
+        time.sleep(1)  # Wait for a second before checking again
 
-ser = serial.Serial(port, 115200)  # Adjust baud rate as needed
+# VID and PIDs for the devices
+vid = 0x732B
+pids = [0x8CB0, 0x5B99]
+
+ser = None
 
 root = ThemedTk(theme="equilux")  # Create a themed root window with "equilux" as the default theme
 
@@ -126,7 +149,10 @@ if os.path.exists('config.json'):
 button1 = ttk.Button(frame, text="Program", command=lambda: send_data(ser, text, entries, pressureTransducer, altitudeUnit))
 button1.grid(row=len(entries)+2, column=0, columnspan=5)
 
+# Start a new thread to find the device
+threading.Thread(target=find_device, args=(vid, pids, text)).start()
+
 # Start a new thread to read from the serial port
-threading.Thread(target=read_from_serial, args=(ser, text)).start()
+threading.Thread(target=read_from_serial, args=(text,)).start()
 
 root.mainloop()

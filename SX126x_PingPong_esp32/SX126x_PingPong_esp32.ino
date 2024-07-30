@@ -16,13 +16,13 @@
 // of the nodes to initiate the pings
 #define INITIATING_NODE
 //setting pins being used
-int LORACS    = 6; //shared between spi and lora
-int LORAIRQ   = 2;
-int LORARST   = 3;
-int LORABUSY  = 4;
-int LORAMOSI  = 13;
-int LORAMISO  = 19;
-int LORASCK   = 18;
+int LORACS    = 3; //shared between spi and lora
+int LORAIRQ   = 20;
+int LORARST   = 15;
+int LORABUSY  = 2;
+int LORAMOSI  = 11;
+int LORAMISO  = 12;
+int LORASCK   = 10;
 
 // SX1262 has the following connections:
 // NSS pin:   cs
@@ -31,9 +31,7 @@ int LORASCK   = 18;
 // BUSY pin:  gpio
 // SPI 
 // SPI Settings
-SPIClass LoraSPI(HSPI);
-SPISettings LoraSPISettings(2000000, MSBFIRST, SPI_MODE0);
-LLCC68 radio = new Module(LORACS, LORAIRQ, LORARST, LORABUSY, LoraSPI, LoraSPISettings); // this one must be used because esp32
+LLCC68 radio = new Module(LORACS, LORAIRQ, LORARST, LORABUSY, SPI1, RADIOLIB_DEFAULT_SPI_SETTINGS); 
 
 
 
@@ -56,10 +54,14 @@ void setFlag(void) {
 }
 
 void setup() {
-
+  SPI1.setSCK(10);
+  SPI1.setTX(11);
+  SPI1.setRX(12);
+  pinMode(3, OUTPUT);
+  digitalWrite(3, HIGH);
+  SPI1.begin();
   Serial.begin(115200);
-  //(SCK, MISO, MOSI, CS)
-  LoraSPI.begin(LORASCK,LORAMISO,LORAMOSI,LORACS);
+  delay(5000); //needed?
   // initialize SX1262 with default settings
   Serial.print(F("[SX1262] Initializing ... "));
 
@@ -73,7 +75,7 @@ void setup() {
   // preamble length:             LoRa preamble length in symbols. Defaults to 8 symbols.
   //tcxoVoltage	                  TCXO reference voltage to be set on DIO3. Defaults to 1.6 V. If you are seeing -706/-707 error codes, it likely means you are using non-0 value for module with XTAL. To use XTAL, either set this value to 0, or set SX126x::XTAL to true.
   //useRegulatorLDO	              Whether to use only LDO regulator (true) or DC-DC regulator (false). Defaults to false.
-  int state = radio.begin(420.0, 500.0, 11, 5, 0x34, 20, 8, 1.6, false);
+  int state = radio.begin(420.0, 125.0, 9, 7, 0x12, 10, 8, 1.6, false);
 
   if (state == RADIOLIB_ERR_NONE) {
     Serial.println(F("success!"));
@@ -83,86 +85,20 @@ void setup() {
     while (true);
   }
 
-  // set the function that will be called
-  // when new packet is received
-  radio.setDio1Action(setFlag);
-
-  #if defined(INITIATING_NODE)
-    // send the first packet on this node
-    Serial.print(F("[SX1262] Sending first packet ... "));
-    transmissionState = radio.startTransmit("Hello World!");
-    transmitFlag = true;
-  #else
-    // start listening for LoRa packets on this node
-    Serial.print(F("[SX1262] Starting to listen ... "));
-    state = radio.startReceive();
-    if (state == RADIOLIB_ERR_NONE) {
-      Serial.println(F("success!"));
-    } else {
-      Serial.print(F("failed, code "));
-      Serial.println(state);
-      while (true);
-    }
-  #endif
 }
 
 void loop() {
   // check if the previous operation finished
-  if(operationDone) {
-    // reset flag
-    operationDone = false;
 
-    if(transmitFlag) {
-      // the previous operation was transmission, listen for response
-      // print the result
-      if (transmissionState == RADIOLIB_ERR_NONE) {
-        // packet was successfully sent
-        Serial.println(F("transmission finished!"));
-
-      } else {
-        Serial.print(F("failed, code "));
-        Serial.println(transmissionState);
-
-      }
 
       // listen for response
       radio.startReceive();
-      transmitFlag = false;
 
-    } else {
+  
       // the previous operation was reception
       // print data and send another packet
       String str;
       int state = radio.readData(str);
-
-      if (state == RADIOLIB_ERR_NONE) {
-        // packet was successfully received
-        Serial.println(F("[SX1262] Received packet!"));
-
-        // print data of the packet
-        Serial.print(F("[SX1262] Data:\t\t"));
         Serial.println(str);
 
-        // print RSSI (Received Signal Strength Indicator)
-        Serial.print(F("[SX1262] RSSI:\t\t"));
-        Serial.print(radio.getRSSI());
-        Serial.println(F(" dBm"));
-
-        // print SNR (Signal-to-Noise Ratio)
-        Serial.print(F("[SX1262] SNR:\t\t"));
-        Serial.print(radio.getSNR());
-        Serial.println(F(" dB"));
-
-      }
-
-      // wait a second before transmitting again
-      delay(1000);
-
-      // send another one
-      Serial.print(F("[SX1262] Sending another packet ... "));
-      transmissionState = radio.startTransmit("Hello World!");
-      transmitFlag = true;
-    }
-  
-  }
 }

@@ -1,1 +1,11 @@
-{"Callsign": "KF0HVS", "Frequency Mhz": "420.690", "Drogue Delay [s]": "0", "Main Delay [s]": "1", "Backup State": "1", "Main Altitude": "1500"}
+{
+    "Callsign": "KF0HVS",
+    "Frequency Mhz": 420.69,
+    "Drogue Delay [s]": 0,
+    "Main Delay [s]": 1,
+    "Backup State": 3,
+    "Main Altitude": 1500,
+    "Theme": "Dark Mode",
+    "Drogue Delay": 0,
+    "Main Delay": 0
+}

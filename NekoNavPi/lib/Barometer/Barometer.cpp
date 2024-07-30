@@ -39,17 +39,32 @@ void Barometer::readProm() {
         _constants[(command - MS5611_CMD_READ_PROM_FIRST) / 2] *= SPI.transfer16(0);
         digitalWrite(_csPin, HIGH);
         SPI.endTransaction();
-        
     }
 }
 
-uint32_t Barometer::readAdc(uint8_t command) {
-    uint32_t result = 0;
+//send 0 to start the first, send 1 to start the second
+void Barometer::startADC() {
+
     SPI.beginTransaction(_spiSettings);
     digitalWrite(_csPin, LOW);
-    SPI.transfer(command);
-    delayMicroseconds(8220);
+    if(C1 == 0){
+      SPI.transfer(MS5611_CMD_CONVERT_D1);
+      C1 = true;
+    } else{
+      SPI.transfer(MS5611_CMD_CONVERT_D2);
+      C1 = false;
+    }
+    
     digitalWrite(_csPin, HIGH);
+    //gets the first time for delay
+    delay1 = millis();
+}
+
+
+
+uint32_t Barometer::readAdc() {
+    uint32_t result = 0;
+    SPI.beginTransaction(_spiSettings);
     digitalWrite(_csPin, LOW);
     SPI.transfer(MS5611_CMD_READ_ADC);
     uint8_t byte1 = SPI.transfer(0);
@@ -95,12 +110,28 @@ void Barometer::calculateCompensation(uint32_t D1, uint32_t D2) {
 
     P = (D1 * SENS / 2097152 - OFF) / 32768;
 }
-void Barometer::readData(float &temperature, float &pressure) {
-    uint32_t D1 = readAdc(MS5611_CMD_CONVERT_D1);
-    uint32_t D2 = readAdc(MS5611_CMD_CONVERT_D2);
-    calculateCompensation(D1, D2);
 
-    // Assign values to temperature and pressure
-    temperature = TEMP / 100.0; // Assuming two decimal places
-    pressure = P / 100.0; // Assuming two decimal places
+/* 
+Must send in the order of 0, 1
+0 collects the value from D1, 1 collects the value from D2 and then sends the data from temp and pressure over
+So this means call start adc 0, then this 0, then adc 1, then this 1
+*/
+void Barometer::readData(float &temperature, float &pressure) {
+    
+    delay2 = millis();
+    //datasheet says 8.22 so this may be too fast
+    if((delay2 - delay1) < 2){
+      delay(2 - (delay2 - delay1));
+    }
+    if(C2 == 0){
+      D1 = readAdc();
+      C2 = true;
+    }else{
+      D2 = readAdc();
+      calculateCompensation(D1, D2);
+      // Assign values to temperature and pressure
+      temperature = TEMP / 100.0; // Assuming two decimal places
+      pressure = P / 100.0; // Assuming two decimal places
+      C2 = false;
+    }
 }
