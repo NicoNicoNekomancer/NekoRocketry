@@ -5,6 +5,9 @@
 #include "Barometer.h"
 #include "Magnetometer.h"
 #include "MadgwickFilter.h"
+#include "MahonyFilter.h"
+#include "CustomDataTypes.h"
+#include "FlashStorage.h"
 #include <math.h>
 #include <hardware/flash.h>
 #include <hardware/sync.h>
@@ -16,6 +19,8 @@ void initaialaccel();
 void intToBytes(int val, uint8_t *bytes_array);
 void longToBytes(long val, uint8_t *bytes_array);
 void floatToBytes(float val, uint8_t *bytes_array);
+float getVerticalAcceleration();
+float calculateVariance(float *buffer, int size);
 
 ////////////////////////////////////////////////
 //        IMPORTANT ALTIMETER CONSTANTS       //
@@ -27,7 +32,9 @@ const float Aux1Delay = 0;   // seconds
 const float Aux2Delay = 0;   // seconds
 
 // important altimeter constants that will be changed per the user eventually
-#define AccelTHRESHOLD 0.9 // Threshold value for state transition
+#define AccelTHRESHOLD 0.8 // Threshold value for state transition
+#define DETECTION_ANGLE 30  // Change this to set the tilt threshold
+
 ////////////////////////////////////////////////
 
 ////////////////////////////////////////////////
@@ -39,7 +46,7 @@ int LORABUSY = 2;
 int LORAMOSI = 11;
 int LORAMISO = 12;
 int LORASCK = 10;
-SPISettings spiSettings(18000000, MSBFIRST, SPI_MODE0); // 18 MHz clock speed
+SPISettings spiSettings(16000000, MSBFIRST, SPI_MODE0); // 18 MHz clock speed
 LLCC68 radio = new Module(LORACS, LORAIRQ, LORARST, LORABUSY, SPI1, spiSettings);
 
 // carrier frequency:           Carrier frequency in MHz. Defaults to 434.0 MHz. The .0 is important because otherwise it freaks out and goes back to default
@@ -52,7 +59,7 @@ LLCC68 radio = new Module(LORACS, LORAIRQ, LORARST, LORABUSY, SPI1, spiSettings)
 // tcxoVoltage	                TCXO reference voltage to be set on DIO3. Defaults to 1.6 V. If you are seeing -706/-707 error codes, it likely means you are using non-0 value for module with XTAL. To use XTAL, either set this value to 0, or set SX126x::XTAL to true.
 // useRegulatorLDO	            Whether to use only LDO regulator (true) or DC-DC regulator (false). Defaults to false.
 
-const float frequency = 420.0;
+const float frequency = 440.0;
 const float bandwidth = 500;
 const uint8_t spreadingFactor = 9;
 const uint8_t codeRate = 5;
@@ -85,6 +92,7 @@ size_t messageLength = 16;
 ////////////////////////////////////////////////
 // Madgwick Filter
 Madgwick filter;
+Mahony filter2;
 float q1, q2, q3, q4;
 ////////////////////////////////////////////////
 
@@ -116,7 +124,8 @@ float magX, magY, magZ, magYaw;
 bool AccelZNegative = true;
 bool AccelXNegative = true;
 
-float t1, t2, dt, t0, tbaro;
+float t1, t2, t0, tbaro;
+short dt;
 float accelroll, accelpitch, gyroroll, gyropitch, gyroyaw;
 float roll, pitch, yaw, altitudeSlope;
 float gyrorollOld = 0;
@@ -128,6 +137,13 @@ float gyroXcal, gyroYcal, gyroZcal, gyroXcal2, gyroYcal2, gyroZcal2;
 float accelXcal, accelYcal, accelZcal, accelXcal2, accelYcal2, accelZcal2;
 float magXcal, magYcal, magZcal, magXcal2, magYcal2, magZcal2;
 
+//low pass filter terms
+#define ALPHA 0.8 //can be between 0.7 and 0.9 for best results
+
+float lastGyroX = 0.0f, lastGyroY = 0.0f, lastGyroZ = 0.0f, lastAccelX = 0.0f, lastAccelY = 0.0f, lastAccelZ = 0.0f, lastMagX = 0.0f, lastMagY = 0.0f, lastMagZ = 0.0f;
+
+
+
 // gyro calibration terms
 float bias_x, bias_y, bias_z;
 float max_x, min_x, max_y, min_y, max_z, min_z, magCalX, magCalY, magCalZ;
@@ -135,8 +151,8 @@ float max_x, min_x, max_y, min_y, max_z, min_z, magCalX, magCalY, magCalZ;
 //to do a fresh calibration, values must be the following
 //{0.0, 0.0, 0.0}
 //{{1.0, 0.0, 0.0}, {0.0, 1.0, 0.0}, {0.0, 0.0, 1.0}}
-float magOffset[3] = {36.500000, 321.000000, 898.000000};
-float magSoftIron[3][3] = {{1.0, 0.0, 0.0}, {0.0, 1.0, 0.0}, {0.0, 0.0, 1.0}};
+float magOffset[3] = {9,2,0}; //current {9,2,0}  
+float magSoftIron[3][3] = {{1.020979, 0.0, 0.0}, {0.0, 0.999240, 0.0}, {0.0, 0.0, 0.980597}}; //initial values are diag 1 or {{1.020979, 0.0, 0.0}, {0.0, 0.999240, 0.0}, {0.0, 0.0, 0.980597}}
 
 // full scale values. these are set in the libraries so you need to change here if you change there
 int accelFS = 8;
@@ -145,10 +161,29 @@ int magFS = 16;
 float deg2rad = 0.0174532925;
 float rad2deg = 57.2957795131;
 // storage of data while on pad. will only take up so much space and replace data as it goes
-const int PadSamples = 51; // treat as size 50. last one will store the current location in the array
-const int ValuesPerPad = 3;
+const int PadSamples = 501; // treat as size x + 1. last one will store the current location in the array
+const int ValuesPerPad = 8;
 float dataPad[ValuesPerPad];
 float dataPadStorage[PadSamples][ValuesPerPad];
+//value is summed as data is read in. Its then divided by the i of the loop t get the average.
+//its Y instead of Z as its vertical in this state
+float sumAccelY;
+float sumAlt;
+float averageAccelY; 
+float averageAlt;
+
+float sumq0;
+float averageq0;
+float sumq1;
+float averageq1;
+float sumq2;
+float averageq2;
+float sumq3;
+float averageq3;
+
+// create the arrays to store data
+
+
 
 // Create an instance of the classes
 
@@ -158,16 +193,57 @@ Barometer barometer(BarometerCS, BarometerMOSI, BarometerMISO, BarometerSCK, Bar
 
 Magnetometer magnetometer(MagnetometerCS, MagnetometerMOSI, MagnetometerMISO, MagnetometerSCK, MagnetometerClock);
 
+FlashStorage flashstorage;
+
+CustomDataTypes customdatatypes;
+
+// Create an instance of the data that will be saved to the flash and send over radio
+
+/*
+Accel X     2 bytes
+Accel Y     2 bytes
+Accel Z     2 bytes
+Q0          3 bytes
+Q1          3 bytes
+Q2          3 bytes
+Q3          3 bytes
+Alt         3 bytes
+dt          2 bytes
+state       1 byte
+{total}     {24 bytes}
+addons
+pressure    3 bytes
+Lat         3 bytes
+Long        3 bytes
+{total}     {9 bytes}
+*/
+struct SensorData {
+
+  uint8_t AccelX[2]; // Encoded X acceleration (2 bytes)
+  uint8_t AccelY[2]; // Encoded Y acceleration (2 bytes)
+  uint8_t AccelZ[2]; // Encoded Z acceleration (2 bytes)
+  uint8_t Q0[3];
+  uint8_t Q1[3];
+  uint8_t Q2[3];
+  uint8_t Q3[3];
+  uint8_t Alt[3];
+  uint8_t dT[2];
+  uint8_t State[1];
+  
+};
+//initiialize the sensor data ahead of time
+SensorData sensordata;
+
 // Define states
 enum RocketState
 {
-  PROGRAM, // green
+  PROGRAM, // white
   PAD,     // red
-  BOOST,   // redorange
-  GLIDE,   // orange
-  DROGUE,  // yellow
-  MAIN,    // purple
-  LANDED   // blue
+  BOOST,   // orange
+  GLIDE,   // yellow
+  DROGUE,  // green
+  MAIN,    // blue
+  LANDED   // purple
 };
 RocketState currentState = PAD;
 
@@ -195,12 +271,12 @@ short drogueDelay, mainDelay, backupState;
 long mainAltitude;
 bool pressureTransducer;
 
-// Define the bytes for each state
-const int readState = 153;
-const int writeState = 231;
-const int deleteState = 52;
-const int calibrateState = 262;
-int state = 100;
+// Define the code as bytes for each state
+const char readState = 153;
+const char writeState = 231;
+const char deleteState = 52;
+const char calibrateState = 255;
+char state = 100; //this is our reserved value. never have anything set to this
 enum ProgramState
 {
   READ,
@@ -211,9 +287,20 @@ enum ProgramState
 };
 ProgramState currentprogramstate = DEFAULT;
 
+
+//setting the time
+#define FIXED_DT 0.05f  // Define your desired fixed delta time in seconds (e.g., 0.02s = 50Hz)
+unsigned long previousMillis = 0;  // Store the time of the last update
+unsigned long currentMillis = 0;   // Store the current time
+float dT = FIXED_DT;               // Fixed time step
+const unsigned long dT_ms = dT * 1000;
+
+
 // main altimeter code
 void setup()
 {
+  pixels.begin();
+  pixels.clear();
   pinMode(charges2, OUTPUT);
   pinMode(charges1, OUTPUT);
 
@@ -246,13 +333,15 @@ void setup()
   magnetometer.readData(magX, magY, magZ, magOffset, magSoftIron);
 
   initaialaccel();
+  magnetometer.initializeCalibration();
+  
+
 }
 
 // radio code
 void setup1()
 {
-  pixels.begin();
-  pixels.clear();
+
   Serial.begin(115200);
   delay(5000); // standardizing the delay
 
@@ -263,10 +352,11 @@ void setup1()
   pinMode(3, OUTPUT);
   digitalWrite(3, HIGH);
   SPI1.begin();
+  delay(5000); // needed?
   // start the rest of the radio stuff
 
   int state = radio.begin(frequency, bandwidth, spreadingFactor, codeRate, syncWord, power, preamble, voltage, regulatorLDO);
-  /*
+
   if (state == RADIOLIB_ERR_NONE)
   {
     Serial.println(F("success!"));
@@ -277,85 +367,211 @@ void setup1()
     Serial.println(state);
     while (true);
   }
-  */
-  radio.implicitHeader(16); // size of payload if this is always known be it payload, crc, and coding rate
+
+  //radio.implicitHeader(16); // size of payload if this is always known be it payload, crc, and coding rate
+  radio.explicitHeader();
+
   // radio.setCRC(2, 0x1D0F, 0x1021, true);
   radio.setPacketSentAction(setFlag);
+
+
 }
 
 // first read is going to have some innate error that i simply cant account for. only the first read though so its not a big deal
+int blink = 0;
+bool haslooped = false;
+
+int BaroLoops = 0;
+//
+// start of the loops are here
+//        
+// Initialize velocity variables
+float velocity = 0.0f;
+
+
+
 void loop()
 {
-  pixels.clear();
+   
   switch (currentState)
   {
-  case PAD:
+    case PAD:
+    for (int i = 0; i < PadSamples - 1; i++) {
+      currentMillis = millis();
+      dt = currentMillis - previousMillis;
 
-    for (int i = 0; i < PadSamples - 1; i++)
-    {
-      // starts the D1 calculation
-      // barometer.startADC(0);
-      // starts tbaro stopwatch
-      tbaro = micros();
-      t1 = tbaro;
-      // gets rough estimation of time between runs
+      if (dt >= dT_ms) {
+        previousMillis = currentMillis;
 
-      // collcts magnetometer data
-      magnetometer.readData(magX, magY, magZ, magOffset, magSoftIron);
+        Serial.print("DEBUG: ");
+        Serial.println(dt);
 
-      // collects D1 and waits for the delay if needed
-      // barometer.readData(temperature, pressure, 0, micros() - tbaro);
-      // restarts tbaro stopwatch
-      // tbaro = micros();
-      // starts the D2 calculation
-      // barometer.startADC(1);
+        // Barometer state machine
+        switch(BaroLoops) {
+          case 0:
+            // Start first conversion
+            barometer.startADC();
+            break;
+            
+          case 2:
+            // Read first conversion and start second
+            barometer.readData(temperature, pressure);
+            barometer.startADC();
+            break;
+            
+          case 4:
+            // Read second conversion and calculate altitude
+            barometer.readData(temperature, pressure);
+            altitude = (44330 * (1 - pow((pressure / 1013.25), 0.1903))) - initialAltitude;
+            
+            // State transition check
+            if (i >= 100 && averageAccelY >= 3 && averageAlt >= 3) {
+              currentState = BOOST;
+              break;
+            }
+            
+            // Reset the counter
+            BaroLoops = -1; // Will become 0 after increment
+            break;
+        }
+        
+        // Always increment BaroLoops
+        BaroLoops++;
+        
+        // These can run every loop
+        magnetometer.readData(magX, magY, magZ, magOffset, magSoftIron);
+        //magnetometer.applyCalibration(magX, magY, magZ);
+        imu.readData(accelX, accelY, accelZ, gyroX, gyroY, gyroZ, imutemp);
+        
+        accelX -= accelXcal;
+        accelY -= accelYcal;
+        accelZ -= accelZcal;
+        gyroX -= gyroXcal;
+        gyroY -= gyroYcal;
+        gyroZ -= gyroZcal;
+        
+        filter.update(gyroX, gyroY, gyroZ, accelX, accelY, accelZ, magX, magY, magZ, q1, q2, q3, q4, FIXED_DT);
+    
 
-      // collcts imu data
-      imu.readData(accelX, accelY, accelZ, gyroX, gyroY, gyroZ, imutemp);
-      // updates the orientation based on sensor values
-      // send in gyro values in degrees / s, and accel and mag in whatever you want. its normailized anyways
-      filter.update(gyroX, gyroY, gyroZ, accelX, accelY, accelZ, magX, magY, magZ, q1, q2, q3, q4);
+        // Store current readings
+        dataPad[0] = accelX;
+        dataPad[1] = accelY;
+        dataPad[2] = accelZ;
+        dataPad[3] = altitude;  // This will use the last valid altitude reading
+        dataPad[4] = q1;
+        dataPad[5] = q2;
+        dataPad[6] = q3;
+        dataPad[7] = q4;
 
-      // collects D2 and waits for the delay if needed, then outputs temp and pressure
-      // barometer.readData(temperature, pressure, 1, micros() - tbaro);
-      // calculates altitude with an offset
-      // altitude = (44330 * (1 - pow((pressure / 1013.25), 0.1903))) - initialAltitude;
+        // Update rolling sums
+        sumAccelY = 0;
+        sumAlt = 0;
+        sumq0 = 0;
+        sumq1 = 0;
+        sumq2 = 0;
+        sumq3 = 0;
+        
+        // Store new data and calculate sums
+        for (int j = 0; j < ValuesPerPad; j++) {
+          dataPadStorage[i][j] = dataPad[j];
+        }
+        dataPadStorage[PadSamples - 1][0] = i;
 
-      dataPad[0] = roll;
-      dataPad[1] = pitch;
-      dataPad[2] = yaw;
-      for (int j = 0; j < ValuesPerPad; j++)
-      {
-        dataPadStorage[i][j] = dataPad[j];
+        // Calculate sums using a window of the last 100 samples or less
+        int windowSize = min(i + 1, 100);  // Use either all samples up to i, or last 100
+        int startIdx = max(0, i - 99);     // Start index for rolling window
+        
+        for (int k = startIdx; k <= i; k++) {
+          sumAccelY += dataPadStorage[k][1];
+          sumAlt += dataPadStorage[k][3];
+          sumq0 += dataPadStorage[k][4];
+          sumq1 += dataPadStorage[k][5];
+          sumq2 += dataPadStorage[k][6];
+          sumq3 += dataPadStorage[k][7];
+        }
+
+        // Calculate averages based on actual window size
+        averageAccelY = sumAccelY / windowSize;
+        averageAlt = sumAlt / windowSize;
+        averageq0 = sumq0 / windowSize;
+        averageq1 = sumq1 / windowSize;
+        averageq2 = sumq2 / windowSize;
+        averageq3 = sumq3 / windowSize;
+
+        /* 
+        Serial.print("DEBUG: ");
+        Serial.print(q1);
+        Serial.print(", ");
+        Serial.print(q2);
+        Serial.print(", ");
+        Serial.print(q3);
+        Serial.print(", ");
+        Serial.print(q4);
+        Serial.print(", ");
+        Serial.print(dt);
+        Serial.print(", ");
+        Serial.println(averageAlt);
+        */
+       
+        /*  THIS IS THE OUTPUT FOR THE MANGETOMETER CALIBRATION!!!!!!!
+        Serial.print("LOG: ");
+        Serial.print(magX);
+        Serial.print(",");
+        Serial.print(magY);
+        Serial.print(",");
+        Serial.println(magZ);
+        */
+
+
+        
+        float verticalAccel = getVerticalAcceleration();
+        //X/Z plane tilt. absolute pita to get this to work though. 
+        // Compute the "up" vector from the quaternion
+        float up_x = 2 * (q2 * q4 - q1 * q3);
+        float up_y = 2 * (q3 * q4 + q1 * q2);
+        float up_z = 1 - 2 * (q2 * q2 + q3 * q3);  // Z-component
+
+        // Compute magnitude of the up vector
+        float up_magnitude = sqrt(up_x * up_x + up_y * up_y + up_z * up_z);
+
+        // Compute TOTAL TILT (X/Z plane tilt)
+        float total_tilt = acos(sqrt(up_x * up_x + up_z * up_z) / up_magnitude) * (180.0 / M_PI);
+
+        // Check if tilt is inside the threshold
+        bool tilt_inside = total_tilt > DETECTION_ANGLE;
+
+        // Print results
+        //Serial.print("Total Tilt: ");
+        //Serial.print(total_tilt);
+        //Serial.print(" degrees, Tilt Exceeded: ");
+        Serial.println(tilt_inside ? "TRUE" : "FALSE");
+
+
+
       }
-      dataPadStorage[PadSamples - 1][0] = i;
-
-      /*
-      Serial.print("Q1 ");
-      Serial.print(q1, 6);
-      Serial.print("\tQ2 ");
-      Serial.print(q2, 6);
-      Serial.print("\tQ3 ");
-      Serial.print(q3, 6);
-      Serial.print("\tQ4 ");
-      Serial.println(q4, 6);
-      */
-
-      Serial.print(magX);
-      Serial.print(",");
-      Serial.print(magY);
-      Serial.print(",");
-      Serial.println(magZ);
-      
     }
 
-    // pixels.setPixelColor(0, pixels.Color(0, 0, 0));
-    // pixels.show();
-
+    // LED blinking logic
+    if (blink == 1000) {
+      pixels.setPixelColor(0, pixels.Color(0, 0, 0));
+      pixels.show();
+    }
+    if (blink == 2000) {
+      pixels.setPixelColor(0, pixels.Color(255, 10, 10));
+      pixels.show();
+      blink = 0;
+    }
+    blink++;
+    
     break;
 
   case BOOST:
 
+    pixels.setPixelColor(0, pixels.Color(255, 150, 10)); //orange
+    pixels.show();
+    Serial.print("LOG:");
+    Serial.println(dataPadStorage[PadSamples - 1][0]);
+    delay(1000);
     break;
 
   case GLIDE:
@@ -387,155 +603,103 @@ void loop()
     {
 
     case READ:
-      Serial.println("ACK");
-      // Wait until data is available
-      while (Serial.available() == 0)
       {
-        ; // Do nothing until data is available
+        Serial.println("LOG:ACK");  // Send ACK immediately
+
+
+        pixels.setPixelColor(0, pixels.Color(200, 100, 50));
+        pixels.show();
+
+        currentprogramstate = DEFAULT;
+        break;
       }
-      // Now that data is available, read the incoming bytes
-      incomingByte = Serial.read();
-      byteindex = 0;
-
-      while (incomingByte != '\n' && Serial.available() > 0 && byteindex < sizeof(receivedByte))
-      {
-        receivedByte[byteindex] = incomingByte;
-        incomingByte = Serial.read();
-        byteindex += 1;
-      }
-      // Add the last read byte to the string
-      receivedByte[byteindex] = incomingByte;
-
-      memcpy(&callsign, &receivedByte[0], 6);
-      callsign[6] = '\0'; // Null-terminate the string
-      memcpy(&frequencyMhz, &receivedByte[6], 4);
-      memcpy(&drogueDelay, &receivedByte[10], 2);
-      memcpy(&mainDelay, &receivedByte[12], 2);
-      memcpy(&mainAltitude, &receivedByte[14], 4);
-      memcpy(&backupState, &receivedByte[18], 2);
-      memcpy(&pressureTransducer, &receivedByte[20], 1);
-
-      // Print the interpreted data
-      Serial.println(callsign);
-      Serial.println(frequencyMhz);
-      Serial.println(drogueDelay);
-      Serial.println(mainDelay);
-      Serial.println(mainAltitude);
-      Serial.println(backupState);
-      Serial.println(pressureTransducer);
-
-      pixels.setPixelColor(0, pixels.Color(random(200), random(200), random(200)));
-      pixels.show();
-      currentprogramstate = DEFAULT;
-      delay(1000);
-      break;
-
     case WRITE:
 
-      Serial.println("FLASH_PAGE_SIZE = " + String(FLASH_PAGE_SIZE, DEC));
-      Serial.println("FLASH_SECTOR_SIZE = " + String(FLASH_SECTOR_SIZE, DEC));
-      Serial.println("FLASH_BLOCK_SIZE = " + String(FLASH_BLOCK_SIZE, DEC));
-      Serial.println("PICO_FLASH_SIZE_BYTES = " + String(PICO_FLASH_SIZE_BYTES, DEC));
-      Serial.println("XIP_BASE = 0x" + String(XIP_BASE, HEX));
 
-      // Read the flash using memory-mapped addresses
-      // For that we must skip over the XIP_BASE worth of RAM
-      // int addr = FLASH_TARGET_OFFSET + XIP_BASE;
-      // flash target offset is the actual spot im wanting to store data at. In thise case, its the very last sector, so id want to store data backwards.
-      for (page = 0; page < FLASH_SECTOR_SIZE / FLASH_PAGE_SIZE; page++)
-      {
-        addr = XIP_BASE + FLASH_TARGET_OFFSET + (page * FLASH_PAGE_SIZE);
-        p = (int *)addr;
-        Serial.print("First four bytes of page " + String(page, DEC));
-        Serial.print("( at 0x" + (String(int(p), HEX)) + ") = ");
-        Serial.println(*p);
-        if (*p == -1 && first_empty_page < 0)
-        {
-          first_empty_page = page;
-          Serial.println("First empty page is #" + String(first_empty_page, DEC));
-        }
-      }
-
-      if (Serial.available() >= DATA_SIZE)
-      {
-        // Read the data from the serial port
-        for (int i = 0; i < DATA_SIZE; i++)
-        {
-          buf[i] = Serial.read();
-        }
-
-        if (first_empty_page < 0)
-        {
-          Serial.println("Full sector, erasing...");
-          uint32_t ints = save_and_disable_interrupts();
-          flash_range_erase(FLASH_TARGET_OFFSET, FLASH_SECTOR_SIZE);
-          first_empty_page = 0;
-          restore_interrupts(ints);
-        }
-        Serial.println("Writing to page #" + String(first_empty_page, DEC));
-        uint32_t ints = save_and_disable_interrupts();
-        flash_range_program(FLASH_TARGET_OFFSET + (first_empty_page * FLASH_PAGE_SIZE), buf, FLASH_PAGE_SIZE);
-        restore_interrupts(ints);
-      }
       currentprogramstate = DEFAULT;
       break;
 
     case CALIBRATE:
     {
-      Serial.println("ACK");
-
-      Serial.print("Current Offset: ");
+      Serial.println("LOG:ACK");
+    
+      Serial.print("LOG:Current Offset: ");
       Serial.print("  X: ");
       Serial.print(magOffset[0], 6);
       Serial.print("  Y: ");
       Serial.print(magOffset[1], 6);
       Serial.print("  Z: ");
       Serial.println(magOffset[2], 6);
+    
       float magCalOffset[3] = {0.0, 0.0, 0.0};
-      magnetometer.storeOffset(magCalOffset[0], magCalOffset[1], magCalOffset[2]);
-      delay(1000); // Wait for 1 seconds to ensure the Python code is ready to receive data
+      float magSoftIron[3][3] = {{1.0, 0.0, 0.0}, {0.0, 1.0, 0.0}, {0.0, 0.0, 1.0}};
+      //magnetometer.storeOffset(magCalOffset[0], magCalOffset[1], magCalOffset[2]);
+      delay(1000);
       magnetometer.SelfTest();
-
-      // reset to the base state
       magnetometer.begin();
-      Serial.print("Calibration starting in 3...");
-      delay(1000); // Wait for 1 seconds
-      Serial.print("2...");
-      delay(1000); // Wait for 1 seconds
-      Serial.print("1...");
-      delay(1000); // Wait for 1 seconds
-      Serial.println("Move altimeter in a figure 8 in the air");
+    
+      Serial.println("LOG:Calibration starting in ");
+      Serial.println("LOG:3...");
+      delay(1000);
+      Serial.println("LOG:2...");
+      delay(1000);
+      Serial.println("LOG:1...");
+      delay(1000);
+      Serial.println("LOG:Move altimeter in a figure 8 in the air");
       delay(500);
-
+    
+      float max_x = -3.4e38, min_x = 3.4e38;
+      float max_y = -3.4e38, min_y = 3.4e38;
+      float max_z = -3.4e38, min_z = 3.4e38;
+      
+    
       for (int i = 0; i < 10000; i++)
       {
         magnetometer.readData(magCalX, magCalY, magCalZ, magCalOffset, magSoftIron);
-
+    
         max_x = max(max_x, magCalX);
         min_x = min(min_x, magCalX);
         max_y = max(max_y, magCalY);
         min_y = min(min_y, magCalY);
         max_z = max(max_z, magCalZ);
         min_z = min(min_z, magCalZ);
+    
         if (i % (10000 / 10) == 0)
         {
-          Serial.print("Progress: ");
+          Serial.print("LOG:Progress: ");
           Serial.print(i * 100 / 10000);
           Serial.println("%");
         }
         delay(1);
       }
+    
       bias_x = (max_x + min_x) / 2.0;
       bias_y = (max_y + min_y) / 2.0;
       bias_z = (max_z + min_z) / 2.0;
-
-      Serial.println("Magnetometer offset was calculated at (X, Y, Z) ");
-      Serial.println(bias_x, 6);
-      Serial.println(bias_y, 6);
-      Serial.println(bias_z, 6);
+    
+      float scale_x = (max_x - min_x) / 2.0;
+      float scale_y = (max_y - min_y) / 2.0;
+      float scale_z = (max_z - min_z) / 2.0;
+      float avg_scale = (scale_x + scale_y + scale_z) / 3.0;
+      
+      magSoftIron[0][0] = avg_scale / scale_x;
+      magSoftIron[1][1] = avg_scale / scale_y;
+      magSoftIron[2][2] = avg_scale / scale_z;
+    
+      Serial.println("LOG:Magnetometer offset was calculated at (X, Y, Z) ");
+      Serial.print("LOG:"); Serial.println(bias_x, 6);
+      Serial.print("LOG:"); Serial.println(bias_y, 6);
+      Serial.print("LOG:"); Serial.println(bias_z, 6);
+      
+      Serial.println("LOG:Soft iron correction matrix:");
+      Serial.print("LOG:"); Serial.print(magSoftIron[0][0], 6); Serial.print(", "); Serial.print(magSoftIron[0][1], 6); Serial.print(", "); Serial.println(magSoftIron[0][2], 6);
+      Serial.print("LOG:"); Serial.print(magSoftIron[1][0], 6); Serial.print(", "); Serial.print(magSoftIron[1][1], 6); Serial.print(", "); Serial.println(magSoftIron[1][2], 6);
+      Serial.print("LOG:"); Serial.print(magSoftIron[2][0], 6); Serial.print(", "); Serial.print(magSoftIron[2][1], 6); Serial.print(", "); Serial.println(magSoftIron[2][2], 6);
+    
       currentprogramstate = DEFAULT;
       break;
     }
+      
     case DEFAULT:
 
       for (int i = 0; i < 255; i++)
@@ -547,33 +711,34 @@ void loop()
       if (Serial.available() > 0)
       {
         String receivedString = Serial.readStringUntil('\n');
-        state = receivedString.toInt();
+        state = (char)receivedString.toInt();
 
         // Check the state
         if (state == readState)
         {
           currentprogramstate = READ;
-          Serial.println("Switched to READ state");
+          Serial.println("LOG:Switched to READ state");
           return;
         }
         else if (state == writeState)
         {
           currentprogramstate = WRITE;
-          Serial.println("Switched to WRITE state");
+          Serial.println("LOG:Switched to WRITE state");
           return;
         }
         else if (state == deleteState)
         {
           currentprogramstate = DELETE;
-          Serial.println("Switched to DELETE state");
+          Serial.println("LOG:Switched to DELETE state");
           return;
         }
         else if (state == calibrateState)
         {
           currentprogramstate = CALIBRATE;
-          Serial.println("Switched to Calibrate state");
+          Serial.println("LOG:Switched to Calibrate state");
           return;
         }
+       
       }
 
       for (int i = 255; i > 0; i--)
@@ -587,103 +752,119 @@ void loop()
   }
 }
 
+
 // radio loop. just sends data. thats it. Might also use it to save but not sure
-void loop1()
-{
+void loop1() {
+  if (transmittedFlag) {
+      transmittedFlag = false;
 
-  if (transmittedFlag)
-  {
-    // reset flag
-    transmittedFlag = false;
-    pixels.setPixelColor(0, pixels.Color(random(200), random(200), random(200)));
-    pixels.show();
+      SensorData sensordata;
 
-    floatToBytes(q1, Q1);
-    floatToBytes(q2, Q2);
-    floatToBytes(q3, Q3);
-    floatToBytes(q4, Q4);
-    memcpy(message, Q1, 4);
-    memcpy(message + 4, Q2, 4);
-    memcpy(message + 8, Q3, 4);
-    memcpy(message + 12, Q4, 4);
+      // Encode sensor values before transmission
+      customdatatypes.encodeAcceleration(accelX, sensordata.AccelX);
+      customdatatypes.encodeAcceleration(accelY, sensordata.AccelY);
+      customdatatypes.encodeAcceleration(accelZ, sensordata.AccelZ);
+      customdatatypes.encodeQuaternion(q1, sensordata.Q0);
+      customdatatypes.encodeQuaternion(q2, sensordata.Q1);
+      customdatatypes.encodeQuaternion(q3, sensordata.Q2);
+      customdatatypes.encodeQuaternion(q4, sensordata.Q3);
+      customdatatypes.encodeAltitude(altitude, sensordata.Alt);
+      memcpy(sensordata.dT, &dt, sizeof(dt));
+      sensordata.State[0] = static_cast<uint8_t>(currentState);
 
-    // transmissionState = radio.startTransmit(message, messageLength, 0);
-    transmissionState = radio.startTransmit(message, 16);
+      // Send struct as raw bytes
+      transmissionState = radio.startTransmit((uint8_t*)&sensordata, sizeof(SensorData));
+      //Serial.println(transmissionState);
+      delay(5);
   }
 }
 
-void calibration()
-{
+void calibration() {
+  int samples = 100;
+  Serial.println("Starting IMU & Magnetometer Calibration...");
+  Serial.println("Keep device stationary during calibration...");
+  
+  // Initialize sums for averaging
+  float gyroXSum = 0, gyroYSum = 0, gyroZSum = 0;
+  float accelXSum = 0, accelYSum = 0, accelZSum = 0;
+  float magXMin = 10000, magYMin = 10000, magZMin = 10000;
+  float magXMax = -10000, magYMax = -10000, magZMax = -10000;
+  
+  // Step 1: Collect sensor data
+  for (int i = 0; i < samples; i++) {
+      imu.readData(accelX, accelY, accelZ, gyroX, gyroY, gyroZ, imutemp);
+      magnetometer.readData(magX, magY, magZ, magOffset, magSoftIron);
 
-  magnetometer.storeOffset(magOffset[0], magOffset[1], magOffset[2]);
+      // Accumulate gyroscope readings
+      gyroXSum += gyroX;
+      gyroYSum += gyroY;
+      gyroZSum += gyroZ;
 
-  for (int i = 0; i < gyroCalSamples; i++)
-  {
-    imu.readData(accelX, accelY, accelZ, gyroX, gyroY, gyroZ, imutemp);
-    gyroXcal2 += gyroX;
-    gyroYcal2 += gyroY;
-    gyroZcal2 += gyroZ;
+      // Accumulate accelerometer readings
+      accelXSum += accelX;
+      accelYSum += accelY;
+      accelZSum += accelZ;
 
-    accelXcal2 += accelX;
-    accelYcal2 += accelY;
-    accelZcal2 += accelZ;
+      // Find magnetometer min/max for hard-iron calibration
+      if (magX < magXMin) magXMin = magX;
+      if (magY < magYMin) magYMin = magY;
+      if (magZ < magZMin) magZMin = magZ;
+      if (magX > magXMax) magXMax = magX;
+      if (magY > magYMax) magYMax = magY;
+      if (magZ > magZMax) magZMax = magZ;
 
-    magXcal2 += magX;
-    magYcal2 += magY;
-    magZcal2 += magZ;
+      delay(5);
   }
-  gyroXcal2 /= gyroCalSamples;
-  gyroYcal2 /= gyroCalSamples;
-  gyroZcal2 /= gyroCalSamples;
 
-  accelXcal2 /= gyroCalSamples;
-  accelYcal2 /= gyroCalSamples;
-  accelZcal2 /= gyroCalSamples;
+  // Step 2: Compute gyroscope biases (offsets) - this is correct
+  gyroXcal = gyroXSum / samples;
+  gyroYcal = gyroYSum / samples;
+  gyroZcal = gyroZSum / samples;
 
-  magXcal2 /= gyroCalSamples;
-  magYcal2 /= gyroCalSamples;
-  magZcal2 /= gyroCalSamples;
+  // Step 3: Compute accelerometer biases properly
+  // Calculate average readings
+  float accelXAvg = accelXSum / samples;
+  float accelYAvg = accelYSum / samples;
+  float accelZAvg = accelZSum / samples;
+  
+  // Calculate magnitude of the acceleration vector
+  float accelMagnitude = sqrt(accelXAvg*accelXAvg + accelYAvg*accelYAvg + accelZAvg*accelZAvg);
+  
+  // Normalize to gravity (should be close to 1g or 9.81 m/s²)
+  float scaleFactor = 1.0 / accelMagnitude;
+  
+  // Calculate bias as deviation from expected normalized values
+  // We're assuming any static position, so we preserve the gravity direction
+  // but normalize its magnitude
+  accelXcal = accelXAvg - (accelXAvg * scaleFactor);
+  accelYcal = accelYAvg - (accelYAvg * scaleFactor);
+  accelZcal = accelZAvg - (accelZAvg * scaleFactor);
 
-  for (int i = 0; i < gyroCalSamples; i++)
-  {
-    imu.readData(accelX, accelY, accelZ, gyroX, gyroY, gyroZ, imutemp);
-    gyroXcal += gyroX - gyroXcal2;
-    gyroYcal += gyroY - gyroYcal2;
-    gyroZcal += gyroZ - gyroZcal2;
+  // Step 4: Compute magnetometer hard-iron offset (center of min/max)
+  magXcal = (magXMax + magXMin) / 2.0f;
+  magYcal = (magYMax + magYMin) / 2.0f;
+  magZcal = (magZMax + magZMin) / 2.0f;
 
-    gyroXcal += gyroX - gyroXcal2;
-    gyroYcal += gyroY - gyroYcal2;
-    gyroZcal += gyroZ - gyroZcal2;
+  Serial.println("Calibration Complete!");
+  Serial.print("Gyro Bias: ");
+  Serial.print(gyroXcal); Serial.print(", ");
+  Serial.print(gyroYcal); Serial.print(", ");
+  Serial.println(gyroZcal);
 
-    gyroXcal += gyroX - gyroXcal2;
-    gyroYcal += gyroY - gyroYcal2;
-    gyroZcal += gyroZ - gyroZcal2;
-  }
-  gyroXcal /= gyroCalSamples;
-  gyroYcal /= gyroCalSamples;
-  gyroZcal /= gyroCalSamples;
+  Serial.print("Accel Bias: ");
+  Serial.print(accelXcal); Serial.print(", ");
+  Serial.print(accelYcal); Serial.print(", ");
+  Serial.println(accelZcal);
+  
+  Serial.print("Accel Scale Factor: ");
+  Serial.println(scaleFactor);
 
-  accelXcal /= gyroCalSamples;
-  accelYcal /= gyroCalSamples;
-  accelZcal /= gyroCalSamples;
-
-  magXcal /= gyroCalSamples;
-  magYcal /= gyroCalSamples;
-  magZcal /= gyroCalSamples;
-
-  gyroXcal += gyroXcal2;
-  gyroYcal += gyroYcal2;
-  gyroZcal += gyroZcal2;
-
-  accelXcal += accelXcal2;
-  accelYcal += accelYcal2;
-  accelZcal += accelZcal2;
-
-  magXcal += magXcal2;
-  magYcal += magYcal2;
-  magZcal += magZcal2;
-
+  Serial.print("Magnetometer Offset: ");
+  Serial.print(magXcal); Serial.print(", ");
+  Serial.print(magYcal); Serial.print(", ");
+  Serial.println(magZcal);
 }
+
 
 void initaialaccel()
 {
@@ -715,7 +896,13 @@ void initaialaccel()
       currentState = PAD; // Transition to PAD state
     }
   }
-
+  /*
+  if (initialAccelY > 0){
+    if (initialAccelZ > AccelTHRESHOLD){
+      imu.remapAxisSign(1);
+    }
+  }
+  */
   // this reads in the starting positing from the accelerometer, as this should in most cases be the propper reference.
   // will eventually update this to instead work off of sensor fusion with the magnetometer but thats a thing for later
   accelroll = atan(initialAccelY / sqrt(pow(initialAccelX, 2) + pow(initialAccelZ, 2))) * 180 / PI;
@@ -800,4 +987,92 @@ void intToBytes(int val, uint8_t *bytes_array)
   // Assign bytes to the array
   bytes_array[0] = u.temp_array[0];
   bytes_array[1] = u.temp_array[1];
+}
+
+
+const float deadbandThreshold = 0.02f; // Deadband threshold to reduce drift
+bool stabilized = false;     // Stabilization flag
+unsigned long stabilizationStartTime = 0; // Timer for stabilization
+const unsigned long stabilizationTime = 3000; // 3 seconds stabilization time
+const float stabilizationVarianceThreshold = 0.005f; // Variance threshold for stabilization
+const int stabilizationSamples = 100; // Number of samples to check
+float accelBuffer[stabilizationSamples];
+int sampleIndex = 0;
+bool varianceCheckPassed = false;
+
+float calculateVariance(float *buffer, int size) {
+  float mean = 0.0f;
+  for (int i = 0; i < size; i++) {
+    mean += buffer[i];
+  }
+  mean /= size;
+
+  float variance = 0.0f;
+  for (int i = 0; i < size; i++) {
+    variance += (buffer[i] - mean) * (buffer[i] - mean);
+  }
+  return variance / size;
+}
+
+float getVerticalAcceleration() {
+  struct Quaternion {
+    float w, x, y, z;
+  };
+
+  // Quaternion multiplication
+  auto quatMultiply = [](Quaternion q1, Quaternion q2) -> Quaternion {
+    return {q1.w * q2.w - q1.x * q2.x - q1.y * q2.y - q1.z * q2.z,
+            q1.w * q2.x + q1.x * q2.w + q1.y * q2.z - q1.z * q2.y,
+            q1.w * q2.y - q1.x * q2.z + q1.y * q2.w + q1.z * q2.x,
+            q1.w * q2.z + q1.x * q2.y - q1.y * q2.x + q1.z * q2.w};
+  };
+
+  // Conjugate of quaternion
+  auto quatConjugate = [](Quaternion q) -> Quaternion {
+    return {q.w, -q.x, -q.y, -q.z};
+  };
+
+  Quaternion q = {q1, q2, q3, q4};
+  Quaternion v = {0.0f, accelX, accelY, accelZ};
+  Quaternion qConj = quatConjugate(q);
+  Quaternion result = quatMultiply(quatMultiply(q, v), qConj);
+
+  // Gravity compensation (assuming 1.0 g along Earth Z-axis)
+  float verticalAccel = result.z - 1.0f;
+
+  // Apply deadband to vertical acceleration
+  if (fabs(verticalAccel) < deadbandThreshold) {
+    verticalAccel = 0.0f;
+  }
+
+  // Stabilization routine with variance check
+  if (!stabilized) {
+    accelBuffer[sampleIndex] = verticalAccel;
+    sampleIndex = (sampleIndex + 1) % stabilizationSamples;
+
+    if (sampleIndex == 0) {
+      float variance = calculateVariance(accelBuffer, stabilizationSamples);
+      if (variance < stabilizationVarianceThreshold) {
+        varianceCheckPassed = true;
+      }
+    }
+
+    if (varianceCheckPassed && (millis() - stabilizationStartTime >= stabilizationTime)) {
+      stabilized = true;
+      velocity = 0.0f; // Reset velocity after stabilization
+    }
+
+    if (stabilizationStartTime == 0) {
+      stabilizationStartTime = millis();
+    }
+
+    return 0.0f; // No velocity integration during stabilization
+  }
+
+  // Velocity integration using global dt in milliseconds
+  if (dt > 0) {
+    velocity += verticalAccel * (dt / 1000.0f); // Convert ms to seconds
+  }
+
+  return verticalAccel;
 }

@@ -6,7 +6,7 @@ next to the end of the first byte is the address
 next byte is data that is read or written
 https://www.st.com/resource/en/datasheet/lis3mdl.pdf
 
-currently +- 8 gauss
+
 full values are the following
 
 FS      Scale     Register
@@ -30,19 +30,22 @@ public:
     void SelfTest();
     void storeOffset(float gaussValueX, float gaussValueY, float gaussValueZ);
 
+    void applyCalibration(float &mx, float &my, float &mz);
+    void initializeCalibration();
+
 private: 
     const uint8_t CTRL_REG1 = 0x20;
     const uint8_t CTRL_REG2 = 0x21;
     const uint8_t CTRL_REG3 = 0x22;
     const uint8_t CTRL_REG4 = 0x23;
     const uint8_t CTRL_REG5 = 0x24;
-    //using temp sensor, lpm, Fast_odr to bypass 80hz
-    const uint8_t CTRL_REG1_Command = 0x82;
+    //not using temp sensor, Low Power Mode, Fast_odr to bypass 80hz, No self test
+    const uint8_t CTRL_REG1_Command = 0x02;
     //+- 16 gauss
     const uint8_t CTRL_REG2_Command = 0x60;
     //dont need to touch for now
     const uint8_t CTRL_REG3_Command = 0x00;
-    //z axis high performance
+    //z axis Low Power Mode 
     const uint8_t CTRL_REG4_Command = 0x00;
     //dont need to touch for now
     const uint8_t CTRL_REG5_Command = 0x00;
@@ -52,7 +55,7 @@ private:
     const uint8_t Dummy = 0x00;
 
     int _csPin, _mosiPin, _misoPin, _sckPin;
-    float scale = 0.0005844535;
+    float scale = 16.0 / 1711.0;
     uint8_t OFFSET[6];
     uint8_t OFFSETSize = 6;
     uint8_t MagData[6];
@@ -70,6 +73,21 @@ private:
 
     void init();
     float SelfTestX1, SelfTestY1, SelfTestZ1, SelfTestX2, SelfTestY2, SelfTestZ2, diffX, diffY, diffZ;
+
+
+
+
+    void updateMinMax(float mx, float my, float mz);
+    void computeHardIronBias();
+    void computeSoftIronMatrix();
+
+
+
+    // Global variables for calibration
+    float hardIronBias[3] = {0, 0, 0};
+    float softIronMatrix[3][3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+    float minVal[3] = {1000, 1000, 1000};
+    float maxVal[3] = {-1000, -1000, -1000};
 };
 
 #endif

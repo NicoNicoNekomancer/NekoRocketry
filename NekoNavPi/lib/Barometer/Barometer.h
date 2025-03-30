@@ -5,6 +5,12 @@ it has a built in delay for the calculation that you cant get around.
 its based on what resoltuion / osr you use, BUT, it does lets you do other stuff while it calculates
 so this means that you need to first call the d1 calc, then do the rest of the sensors, then do the d2 calc,
 then do everything else, and then collect the data
+
+https://www.te.com/commerce/DocumentDelivery/DDEController?Action=showdoc&DocId=Data+Sheet%7FMS5611-01BA03%7FB3%7Fpdf%7FEnglish%7FENG_DS_MS5611-01BA03_B3.pdf%7FCAT-BLPS0036
+  OSR:256 OSR:512 OSR:1024  OSR:2048  OSR:4096
+D1  0x40    0x42    0x44      0x46      0x48
+D2  0x50    0x52    0x54      0x56      0x58
+
 */
 #ifndef Barometer_h
 #define Barometer_h
@@ -26,8 +32,8 @@ private:
     const uint8_t MS5611_CMD_READ_PROM_FIRST = 0xA0;
     const uint8_t MS5611_CMD_READ_PROM_LAST = 0xAE;
     const uint8_t MS5611_CMD_RESET = 0x1E;
-    const uint8_t MS5611_CMD_CONVERT_D1 = 0x44; // OSR 1024
-    const uint8_t MS5611_CMD_CONVERT_D2 = 0x54; // OSR 1024
+    const uint8_t MS5611_CMD_CONVERT_D1 = 0x42; // OSR
+    const uint8_t MS5611_CMD_CONVERT_D2 = 0x52; // OSR
 
     int _csPin, _mosiPin, _misoPin, _sckPin;
     SPISettings _spiSettings;

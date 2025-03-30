@@ -1,0 +1,104 @@
+#include <Arduino.h>
+#include <SPI.h>
+#include <math.h>
+#include <LittleFS.h>
+
+// Function prototypes
+void deleteAllFiles();
+void writeUserLog();
+void readUserLog();
+
+void setup() {
+  // Initialize serial and LittleFS
+  Serial.begin(115200);
+  if (!LittleFS.begin()) {
+    Serial.println("LittleFS mount failed!");
+    return;
+  }
+  Serial.println("LittleFS mounted successfully!");
+  Serial.println("Enter a command:");
+  Serial.println("1 - Delete all files stored in flash");
+  Serial.println("2 - Write user input to userlog.txt");
+  Serial.println("3 - Read userlog.txt");
+}
+
+void loop() {
+  if (Serial.available()) {
+    String input = Serial.readStringUntil('\n');  // Read input until newline
+    input.trim();  // Remove any leading/trailing whitespace
+    int command = input.toInt();  // Convert input to integer
+
+    // Process the command
+    switch (command) {
+      case 1:
+        // Delete all files in LittleFS
+        deleteAllFiles();
+        break;
+      
+      case 2:
+        // Write user input to userlog.txt
+        writeUserLog();
+        break;
+      
+      case 3:
+        // Read and display userlog.txt
+        readUserLog();
+        break;
+      
+      default:
+        Serial.println("Invalid command. Please try again.");
+        break;
+    }
+
+    // Prompt the user again after processing the command
+    Serial.println("Enter a command:");
+    Serial.println("1 - Delete all files stored in flash");
+    Serial.println("2 - Write user input to userlog.txt");
+    Serial.println("3 - Read userlog.txt");
+  }
+}
+
+// Function to delete all files in LittleFS
+void deleteAllFiles() {
+  Serial.println("Deleting all files...");
+  Dir dir = LittleFS.openDir("/");
+  while (dir.next()) {
+    String filename = dir.fileName();
+    LittleFS.remove(filename);
+    Serial.print("Deleted: ");
+    Serial.println(filename);
+  }
+  Serial.println("All files deleted.");
+}
+
+// Function to write user input to userlog.txt
+void writeUserLog() {
+  Serial.println("Enter your log message:");
+  while (Serial.available() == 0) {
+    // Wait for user input
+  }
+
+  String userLogMessage = Serial.readStringUntil('\n');  // Read the input from the user
+  File logFile = LittleFS.open("/userlog.txt", "w");
+  if (logFile) {
+    logFile.println(userLogMessage);
+    logFile.close();
+    Serial.println("Message written to userlog.txt.");
+  } else {
+    Serial.println("Failed to open userlog.txt for writing.");
+  }
+}
+
+// Function to read and display the contents of userlog.txt
+void readUserLog() {
+  File logFile = LittleFS.open("/userlog.txt", "r");
+  if (logFile) {
+    Serial.println("Contents of userlog.txt:");
+    while (logFile.available()) {
+      Serial.write(logFile.read());
+    }
+    logFile.close();
+  } else {
+    Serial.println("Failed to open userlog.txt for reading.");
+  }
+}

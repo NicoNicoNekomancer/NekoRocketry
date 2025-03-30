@@ -796,4 +796,26 @@ void IMU::readData(float &AccelX, float &AccelY, float &AccelZ, float &GyroX, fl
   return result;
 }
 
+//  remap the sign of the axis as needed. Send in the axis x,y,z of 0,1,2 and then it flips the sign
+void IMU::remapAxisSign(uint8_t axis){
+    uint8_t remapData1 = 0x88; // set it to the default paramaters
+    uint8_t remapData2 = 0x02; // set it to the default paramaters
+    uint8_t mask = 0;
+    switch(axis){
+      case 0: // X Axis
+            mask = 1 << 2;// 1 << bit position
+            remapData1 = remapData1 ^ mask;
+          break;
+      case 1: // Y Axis
+            mask = 1 << 5;
+            remapData1 = remapData1 ^ mask;
+          break;
+      case 2: // Z Axis
+            mask = 1 << 0;
+            remapData2 = remapData2 ^ mask;
+          break;
+    }
+    
+    writeRegPage(0x34,1,remapData1,remapData2);
 
+}

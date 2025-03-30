@@ -1,0 +1,18 @@
+Hard Iron Calibration (Bias):
+X: 0.887630
+Y: -1.058200
+Z: -1.848480
+
+Soft Iron Calibration (Transform Matrix):
+1.521180, 0.121077, -0.158613
+0.121077, 1.283309, 0.015383
+-0.158613, 0.015383, 1.058962
+
+Magneto1.2 Format:
+Hard iron (bias) x y z [uT]:
+0.887630 -1.058200 -1.848480
+
+Soft iron (transformation matrix):
+1.521180 0.121077 -0.158613
+0.121077 1.283309 0.015383
+-0.158613 0.015383 1.058962

@@ -19,6 +19,7 @@ public:
     IMU(int csPin, int mosiPin, int misoPin, int sckPin, int clock);
     void begin();
     void readData(float &AccelX, float &AccelY, float &AccelZ, float &GyroX, float &GyroY, float &GyroZ, float &IMUTemp);
+    void remapAxisSign(uint8_t axis);
 
 private:
 
@@ -59,6 +60,7 @@ private:
     void testcommunication();
     void initIMU();
     void getIMUData();
+    
     int16_t twosComplement(uint8_t lowByte, uint8_t highByte);
 };
 

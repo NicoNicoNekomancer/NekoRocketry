@@ -10,7 +10,7 @@
 #include <RadioLib.h>
 #include <SPI.h>
 #include <Adafruit_TinyUSB.h>
-
+#include "CustomDataTypes.h"
 
 
 
@@ -42,7 +42,7 @@ LLCC68 radio = new Module(LORACS, LORAIRQ, LORARST, LORABUSY, SPI1, spiSettings)
 // tcxoVoltage	                TCXO reference voltage to be set on DIO3. Defaults to 1.6 V. If you are seeing -706/-707 error codes, it likely means you are using non-0 value for module with XTAL. To use XTAL, either set this value to 0, or set SX126x::XTAL to true.
 // useRegulatorLDO	            Whether to use only LDO regulator (true) or DC-DC regulator (false). Defaults to false.
 
-const float frequency = 420.0;
+const float frequency = 440.0;
 const float bandwidth = 500;
 const uint8_t spreadingFactor = 9;
 const uint8_t codeRate = 5;
@@ -57,6 +57,43 @@ const uint8_t RadioAddress = 0; // address for FSK. default is 0.
 int transmissionState = RADIOLIB_ERR_NONE;
 
 
+
+/*
+Accel X     2 bytes
+Accel Y     2 bytes
+Accel Z     2 bytes
+Q0          3 bytes
+Q1          3 bytes
+Q2          3 bytes
+Q3          3 bytes
+Alt         3 bytes
+dt          2 bytes
+state       1 byte
+{total}     {24 bytes}
+addons
+pressure    3 bytes
+Lat         3 bytes
+Long        3 bytes
+{total}     {9 bytes}
+*/
+struct SensorData {
+
+  uint8_t AccelX[2]; // Encoded X acceleration (2 bytes)
+  uint8_t AccelY[2]; // Encoded Y acceleration (2 bytes)
+  uint8_t AccelZ[2]; // Encoded Z acceleration (2 bytes)
+  uint8_t Q0[3];
+  uint8_t Q1[3];
+  uint8_t Q2[3];
+  uint8_t Q3[3];
+  uint8_t Alt[3];
+  uint8_t dT[2];
+  uint8_t State[1];
+  
+};
+//initiialize the sensor data ahead of time
+SensorData sensordata;
+
+CustomDataTypes customdatatypes;
 
 // flag to indicate that a packet was sent or received
 volatile bool receivedFlag = false;
@@ -118,49 +155,46 @@ void setup()
     while (true);
   }
   //radio.setCRC(2, 0x1D0F, 0x1021, true);
-  radio.implicitHeader(16); //size of payload if this is always known be it payload, crc, and coding rate
+  //radio.implicitHeader(16); //size of payload if this is always known be it payload, crc, and coding rate
+  radio.explicitHeader();
+
   radio.setPacketReceivedAction(setFlag);
   state = radio.startReceive();
- 
+  Serial.println("Starting");
 }
 
 
-void loop()
-{
-  // check if the flag is set
-  if(receivedFlag) {
-    //reset flag
-    receivedFlag = false;
-    //read received data
-    byte str[16];
-    int state = radio.readData(str,16);
-    // convert the 16-byte string into 4 floats
-    float output[4];
-    for (int i = 0; i < 4; ++i) {
-      memcpy(&output[i], &str[i * 4], sizeof(float));
-    }
-    // check for overflow
-    bool overflow = false;
-    for (int i = 0; i < 4; ++i) {
-      if (isinf(output[i]) || isnan(output[i])) {
-        overflow = true;
-        break;
+void loop() {
+  if (receivedFlag) {
+      receivedFlag = false;
+
+      SensorData receivedData;
+      int state = radio.readData((uint8_t*)&receivedData, sizeof(SensorData));
+
+      if (state == RADIOLIB_ERR_NONE) {
+          Serial.print("DATA: ");
+
+          // Print Acceleration (Decoded from 2 bytes)
+          Serial.print(CustomDataTypes::decodeAcceleration(receivedData.AccelX)); Serial.print(" ");
+          Serial.print(CustomDataTypes::decodeAcceleration(receivedData.AccelY)); Serial.print(" ");
+          Serial.print(CustomDataTypes::decodeAcceleration(receivedData.AccelZ)); Serial.print(" ");
+
+          // Print Quaternions (Decoded from 3 bytes)
+          Serial.print(CustomDataTypes::decodeQuaternion(receivedData.Q0)); Serial.print(" ");
+          Serial.print(CustomDataTypes::decodeQuaternion(receivedData.Q1)); Serial.print(" ");
+          Serial.print(CustomDataTypes::decodeQuaternion(receivedData.Q2)); Serial.print(" ");
+          Serial.print(CustomDataTypes::decodeQuaternion(receivedData.Q3)); Serial.print(" ");
+
+          // Print Altitude (Decoded from 3 bytes)
+          Serial.print(CustomDataTypes::decodeAltitude(receivedData.Alt)); Serial.print(" ");
+
+          // Print dT (Time Difference, 2 bytes)
+          uint16_t dT;
+          memcpy(&dT, receivedData.dT, sizeof(dT));
+          Serial.print(dT); Serial.print(" ");
+
+          // Print State (1 byte)
+          Serial.println(receivedData.State[0]);
       }
-    }
-    // if overflow, print previous values
-    if (overflow) {
-      memcpy(output, floatArrayOld, sizeof(floatArrayOld));
-    } else {
-      // if no overflow, save current values as old values
-      memcpy(floatArrayOld, output, sizeof(output));
-    }
-    Serial.print(output[0], 6);
-    Serial.print(" ");
-    Serial.print(output[1], 6);
-    Serial.print(" ");
-    Serial.print(output[2], 6);
-    Serial.print(" ");
-    Serial.println(output[3], 6);
   }
 }
-

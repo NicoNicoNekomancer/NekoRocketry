@@ -28,7 +28,7 @@ void W25Q::begin() {
 
 void W25Q::WriteFlash(uint8_t address, uint8_t data[]) {
     /*
-    enable write, send address, then the page. can send from one byte to 256 bytes (one page). If 256 is to be sent, the last address byte houyld be set to 0
+    enable write, send address, then the page. can send from one byte to 256 bytes (one page). If 256 is to be sent, the last address byte should be set to 0
     each transfer writes the next bit of data so n+1
     end with cs set to high
     WriteDisable is automatically set at the end of the page. 
